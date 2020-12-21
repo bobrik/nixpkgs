@@ -20632,6 +20632,8 @@ julia_15 = callPackage ../development/compilers/julia/1.5.nix {
 
   docker-distribution = callPackage ../applications/virtualization/docker/distribution.nix { };
 
+  docker-buildx = callPackage ../applications/virtualization/docker/buildx.nix { };
+
   amazon-ecr-credential-helper = callPackage ../tools/admin/amazon-ecr-credential-helper { };
 
   docker-credential-gcr = callPackage ../tools/admin/docker-credential-gcr { };
