@@ -1,9 +1,11 @@
 { stdenv, lib, fetchFromGitHub, fetchpatch, buildGoPackage
 , makeWrapper, removeReferencesTo, installShellFiles, pkgconfig
 , go-md2man, go, containerd, runc, docker-proxy, tini, libtool
-, sqlite, iproute, lvm2, systemd
-, btrfs-progs, iptables, e2fsprogs, xz, utillinux, xfsprogs, git
+, sqlite, iproute, lvm2, systemd, docker-buildx
+, btrfs-progs, iptables, e2fsprogs, xz, util-linux, xfsprogs, git
 , procps, libseccomp
+, nixosTests
+, buildxSupport ? false
 }:
 
 with lib;
@@ -13,7 +15,7 @@ rec {
       version, rev, sha256
       , runcRev, runcSha256
       , containerdRev, containerdSha256
-      , tiniRev, tiniSha256
+      , tiniRev, tiniSha256, buildxSupport
     } :
   let
     docker-runc = runc.overrideAttrs (oldAttrs: {
@@ -99,7 +101,7 @@ rec {
       makeWrapper
     ] ++ optionals (stdenv.isLinux) [
       sqlite lvm2 btrfs-progs systemd libseccomp
-    ];
+    ] ++ optionals (buildxSupport) [ docker-buildx ];
 
     dontStrip = true;
 
@@ -135,6 +137,9 @@ rec {
       patchShebangs .
       substituteInPlace ./components/engine/hack/make.sh                   --replace libsystemd-journal libsystemd
       substituteInPlace ./components/engine/daemon/logger/journald/read.go --replace libsystemd-journal libsystemd
+    '' + optionalString buildxSupport ''
+      substituteInPlace ./components/cli/cli-plugins/manager/manager_unix.go --replace /usr/libexec/docker/cli-plugins \
+          ${lib.strings.makeSearchPathOutput "bin" "libexec/docker/cli-plugins" [docker-buildx]}
     '';
 
     outputs = ["out" "man"];
@@ -212,6 +217,7 @@ rec {
     containerdSha256 = "0sp5mn5wd3xma4svm6hf67hyhiixzkzz6ijhyjkwdrc4alk81357";
     tiniRev = "fec3683b971d9c3ef73f284f176672c44b448662";
     tiniSha256 = "1h20i3wwlbd8x4jr2gz68hgklh0lb0jj7y5xk1wvr8y58fip1rdn";
+    inherit buildxSupport;
   };
 
   docker_19_03 = makeOverridable dockerGen rec {
@@ -225,5 +231,6 @@ rec {
     containerdSha256 = "10zy507ajslizicagb64dvbs7wmw0j4x3hdhygbdh4g2nv3mgjb7";
     tiniRev = "fec3683b971d9c3ef73f284f176672c44b448662"; # v0.18.0
     tiniSha256 = "1h20i3wwlbd8x4jr2gz68hgklh0lb0jj7y5xk1wvr8y58fip1rdn";
+    inherit buildxSupport;
   };
 }
