@@ -56,6 +56,14 @@ let
       USE_OPENMP = true;
     };
 
+    aarch64-darwin = {
+       BINARY = 64;
+       TARGET = setTarget "VORTEX";
+       DYNAMIC_ARCH = true;
+       USE_OPENMP = true;
+       MACOSX_DEPLOYMENT_TARGET = "11.0";
+    };
+
     x86_64-darwin = {
       BINARY = 64;
       TARGET = setTarget "ATHLON";
