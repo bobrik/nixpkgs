@@ -58,7 +58,6 @@ runCommand "Toolchains" {} (''
 
   ln -s ${buildPackages.gperf}/bin/gperf $toolchain/bin/gperf
   ln -s ${buildPackages.indent}/bin/indent $toolchain/bin/indent
-  ln -s ${buildPackages.ctags}/bin/ctags $toolchain/bin/ctags
 '' + optionalString stdenv.isDarwin ''
   for bin in ${getBin buildPackages.darwin.cctools}/bin/*; do
     if ! [ -e "$toolchain/bin/$(basename $bin)" ]; then
