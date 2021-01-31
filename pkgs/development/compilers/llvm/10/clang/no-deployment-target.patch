@@ -1,0 +1,15 @@
+--- a/lib/Driver/ToolChains/Darwin.cpp
++++ b/lib/Driver/ToolChains/Darwin.cpp
+@@ -334,12 +334,6 @@ void darwin::Linker::AddLinkArgs(Compilation &C, const ArgList &Args,
+   Args.AddAllArgs(CmdArgs, options::OPT_image__base);
+   Args.AddAllArgs(CmdArgs, options::OPT_init);
+ 
+-  // Add the deployment target.
+-  if (Version[0] >= 520)
+-    MachOTC.addPlatformVersionArgs(Args, CmdArgs);
+-  else
+-    MachOTC.addMinVersionArgs(Args, CmdArgs);
+-
+   Args.AddLastArg(CmdArgs, options::OPT_nomultidefs);
+   Args.AddLastArg(CmdArgs, options::OPT_multi__module);
+   Args.AddLastArg(CmdArgs, options::OPT_single__module);

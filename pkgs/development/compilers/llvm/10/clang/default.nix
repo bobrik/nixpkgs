@@ -45,6 +45,9 @@ let
       ./purity.patch
       # https://reviews.llvm.org/D51899
       ./compiler-rt-baremetal.patch
+      # Removing warnings from -macosx_version_min in binutils-wrapper:
+      # https://github.com/NixOS/nixpkgs/issues/101330#issuecomment-716083962
+      ./no-deployment-target.patch
     ];
 
     postPatch = ''

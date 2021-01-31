@@ -1,0 +1,17 @@
+diff --git a/clang/lib/Driver/ToolChains/Darwin.cpp b/clang/lib/Driver/ToolChains/Darwin.cpp
+index 7b879f8cb652..13eebb247f91 100644
+--- a/clang/lib/Driver/ToolChains/Darwin.cpp
++++ b/clang/lib/Driver/ToolChains/Darwin.cpp
+@@ -331,12 +331,6 @@ void darwin::Linker::AddLinkArgs(Compilation &C, const ArgList &Args,
+   Args.AddAllArgs(CmdArgs, options::OPT_image__base);
+   Args.AddAllArgs(CmdArgs, options::OPT_init);
+ 
+-  // Add the deployment target.
+-  if (Version[0] >= 520)
+-    MachOTC.addPlatformVersionArgs(Args, CmdArgs);
+-  else
+-    MachOTC.addMinVersionArgs(Args, CmdArgs);
+-
+   Args.AddLastArg(CmdArgs, options::OPT_nomultidefs);
+   Args.AddLastArg(CmdArgs, options::OPT_multi__module);
+   Args.AddLastArg(CmdArgs, options::OPT_single__module);
