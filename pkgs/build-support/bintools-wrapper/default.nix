@@ -254,15 +254,13 @@ stdenv.mkDerivation {
     '')
 
     + optionalString stdenv.targetPlatform.isMacOS (
+      # Ensure consistent LC_VERSION_MIN_MACOSX and remove LC_UUID.
       let flags =
-        # TODO: this causes a warning which will prevent things like Ruby from
-        # building. However it seems to be essential on aarch64-darwin and
-        # required for bootstrapping.
-        optionals stdenv.targetPlatform.isAarch64 [
+        if stdenv.targetPlatform.isAarch64 then [
           "-macosx_version_min ${stdenv.macosVersionMin or "10.12"}"
+        ] else [
+          "-sdk_version 10.12"
         ] ++
-        [ "-sdk_version ${if stdenv.targetPlatform.isAarch64 then "10.16" else "10.12"}" ] ++
-        # Ensure consistent LC_VERSION_MIN_MACOSX and remove LC_UUID.
         [ "-no_uuid" ];
       in ''
         echo "${concatStringsSep " " flags}" >> $out/nix-support/libc-ldflags-before
