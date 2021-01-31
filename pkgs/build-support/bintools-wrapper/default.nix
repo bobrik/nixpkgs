@@ -257,7 +257,7 @@ stdenv.mkDerivation {
       # Ensure consistent LC_VERSION_MIN_MACOSX and remove LC_UUID.
       let flags =
         if stdenv.targetPlatform.isAarch64 then [
-          "-macosx_version_min ${stdenv.macosVersionMin or "10.12"}"
+          "-macosx_version_min ${stdenv.macosVersionMin or "10.16"}"
         ] else [
           "-sdk_version 10.12"
         ] ++
