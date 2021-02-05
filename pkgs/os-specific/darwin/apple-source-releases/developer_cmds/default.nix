@@ -3,6 +3,8 @@
 appleDerivation {
   nativeBuildInputs = [ xcbuildHook ];
 
+  NIX_CFLAGS_COMPILE = "-fcommon";
+
   patches = [
     # The following copied from
     # https://github.com/Homebrew/homebrew-core/commit/712ed3e948868e17f96b7e59972b5f45d4faf688
