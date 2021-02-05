@@ -9,6 +9,8 @@ stdenv.mkDerivation rec {
     sha256 = "1xyqllxpjj1kimlipx11pzyywf5c25i4wmv0lqm7ph3gnlnb86c2";
   };
 
+  NIX_CFLAGS_COMPILE = "-fcommon";
+
   buildInputs = [ zlib ];
 
   configureLocal = ''
