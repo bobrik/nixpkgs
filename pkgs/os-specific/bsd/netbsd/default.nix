@@ -276,7 +276,7 @@ let
     version = "8.0";
     postPatch = ''
       # make needs this to pick up our sys make files
-      export NIX_CFLAGS_COMPILE+=" -D_PATH_DEFSYSPATH=\"$out/share/mk\""
+      export NIX_CFLAGS_COMPILE+=" -fcommon -D_PATH_DEFSYSPATH=\"$out/share/mk\""
 
       substituteInPlace $NETBSDSRCDIR/share/mk/bsd.lib.mk \
         --replace '_INSTRANLIB=''${empty(PRESERVE):?-a "''${RANLIB} -t":}' '_INSTRANLIB='
