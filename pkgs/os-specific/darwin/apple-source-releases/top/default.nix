@@ -4,6 +4,7 @@ appleDerivation {
   nativeBuildInputs = [ xcbuildHook ];
   buildInputs = [ apple_sdk.frameworks.IOKit ncurses libutil ];
   NIX_LDFLAGS = "-lutil";
+  NIX_CFLAGS_COMPILE = "-fcommon";
   installPhase = ''
     install -D Products/Release/libtop.a $out/lib/libtop.a
     install -D Products/Release/libtop.h $out/include/libtop.h
