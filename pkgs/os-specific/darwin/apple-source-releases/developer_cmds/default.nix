@@ -1,7 +1,7 @@
-{ lib, appleDerivation, xcbuildHook, llvmPackages }:
+{ lib, appleDerivation, xcbuildHook, llvmPackages, makeWrapper }:
 
 appleDerivation {
-  nativeBuildInputs = [ xcbuildHook ];
+  nativeBuildInputs = [ xcbuildHook makeWrapper ];
 
   NIX_CFLAGS_COMPILE = "-fcommon";
 
@@ -13,8 +13,9 @@ appleDerivation {
   ];
 
   postPatch = ''
+    makeWrapper ${llvmPackages.clang}/bin/clang $out/bin/clang-cpp --add-flags "--driver-mode=cpp"
     substituteInPlace rpcgen/rpc_main.c \
-      --replace "/usr/bin/cpp" "${llvmPackages.clang-unwrapped}/bin/clang-cpp"
+      --replace "/usr/bin/cpp" "$out/bin/clang-cpp"
   '';
 
   # temporary install phase until xcodebuild has "install" support
