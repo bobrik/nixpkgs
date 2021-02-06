@@ -10069,13 +10069,28 @@ in
   glslang = callPackage ../development/compilers/glslang { };
 
   go_bootstrap = if stdenv.isAarch64 then
-    srcOnly {
-      name = "go-1.8-linux-arm64-bootstrap";
-      src = fetchurl {
-        url = "https://cache.xor.us/go-1.8-linux-arm64-bootstrap.tar.xz";
-        sha256 = "0sk6g03x9gbxk2k1djnrgy8rzw1zc5f6ssw0hbxk6kjr85lpmld6";
-      };
-    }
+    if stdenv.isDarwin then
+      (srcOnly {
+        name = "go-1.16-rc1-darwin-arm64-bootstrap";
+        src = fetchurl {
+          url = "https://golang.org/dl/go1.16rc1.darwin-arm64.tar.gz";
+          sha256 = "1p9l9qrh5x06jw19bnyfz8hfq6fisxzhc39cq6gwg4xcvn7gxq7m";
+        };
+      }).overrideAttrs (_: rec {
+        installPhase = ''
+          mkdir -p $out/share/go $out/bin
+          mv bin/* $out/bin
+          cp -r . $out/share/go
+        '';
+      })
+    else
+      srcOnly {
+        name = "go-1.8-linux-arm64-bootstrap";
+        src = fetchurl {
+          url = "https://cache.xor.us/go-1.8-linux-arm64-bootstrap.tar.xz";
+          sha256 = "0sk6g03x9gbxk2k1djnrgy8rzw1zc5f6ssw0hbxk6kjr85lpmld6";
+        };
+      }
   else
     callPackage ../development/compilers/go/1.4.nix {
       inherit (darwin.apple_sdk.frameworks) Security;
@@ -10090,7 +10105,7 @@ in
 
   go_1_15 = callPackage ../development/compilers/go/1.15.nix ({
     inherit (darwin.apple_sdk.frameworks) Security Foundation;
-  } // lib.optionalAttrs stdenv.isAarch64 {
+  } // lib.optionalAttrs (stdenv.isAarch64 && !stdenv.isDarwin) {
     stdenv = gcc8Stdenv;
     buildPackages = buildPackages // { stdenv = gcc8Stdenv; };
   });
