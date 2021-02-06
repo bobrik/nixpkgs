@@ -26,6 +26,8 @@ stdenv.mkDerivation rec {
 
   prePatch = optionalString stdenv.isDarwin ''
     substituteInPlace configure --replace " -arch i386" ""
+    substituteInPlace configure --replace 'V_LIB_CCOPT_FAT="-arch x86_64"' 'V_LIB_CCOPT_FAT=""'
+    substituteInPlace configure --replace 'V_LIB_LDFLAGS_FAT="-arch x86_64"' 'V_LIB_LDFLAGS_FAT=""'
   '';
 
   postInstall = ''
