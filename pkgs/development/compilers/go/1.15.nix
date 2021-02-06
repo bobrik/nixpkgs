@@ -1,5 +1,5 @@
 { lib, stdenv, fetchurl, tzdata, iana-etc, runCommand
-, perl, which, pkg-config, patch, procps, pcre, cacert, Security, Foundation
+, perl, which, pkg-config, patch, procps, pcre, cacert, Security, Foundation, xcbuild
 , mailcap, runtimeShell
 , buildPackages
 , pkgsBuildTarget
@@ -36,11 +36,11 @@ in
 
 stdenv.mkDerivation rec {
   pname = "go";
-  version = "1.15.7";
+  version = "1.16rc1";
 
   src = fetchurl {
     url = "https://dl.google.com/go/go${version}.src.tar.gz";
-    sha256 = "1g1a39y1cnvw3y0bjwjms55cz0s9icm8myrgxi295jwfznmb6cc6";
+    sha256 = "1x9zfvjiqd512askzif184xnig0g9wmcr1j0c4qxn88dkngmccva";
   };
 
   # perl is used for testing go vet
@@ -50,6 +50,8 @@ stdenv.mkDerivation rec {
     ++ optionals (stdenv.hostPlatform.libc == "glibc") [ stdenv.cc.libc.static ];
 
   depsTargetTargetPropagated = optionals stdenv.isDarwin [ Security Foundation ];
+
+  propagatedBuildInputs = optionals stdenv.isDarwin [ xcbuild ];
 
   hardeningDisable = [ "all" ];
 
@@ -144,15 +146,15 @@ stdenv.mkDerivation rec {
 
   patches = [
     ./remove-tools-1.11.patch
-    ./ssl-cert-file-1.15.patch
+    # ./ssl-cert-file-1.15.patch
     ./remove-test-pie-1.15.patch
     ./creds-test.patch
     ./go-1.9-skip-flaky-19608.patch
     ./go-1.9-skip-flaky-20072.patch
-    ./skip-external-network-tests-1.15.patch
+    # ./skip-external-network-tests-1.15.patch
     ./skip-nohup-tests.patch
     ./skip-cgo-tests-1.15.patch
-    ./go_no_vendor_checks.patch
+    # ./go_no_vendor_checks.patch
   ] ++ [
     # breaks under load: https://github.com/golang/go/issues/25628
     (if stdenv.isAarch32
