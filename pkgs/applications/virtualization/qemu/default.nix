@@ -3,7 +3,7 @@
 , bison, lzo, snappy, libaio, gnutls, nettle, curl, ninja, meson
 , makeWrapper, autoPatchelfHook
 , attr, libcap, libcap_ng
-, CoreServices, Cocoa, Hypervisor, rez, setfile
+, CoreServices, Cocoa, CloudKit, CoreLocation, CoreAudio, CoreAudioTypes, Hypervisor, rez, setfile
 , numaSupport ? stdenv.isLinux && !stdenv.isAarch32, numactl
 , seccompSupport ? stdenv.isLinux, libseccomp
 , alsaSupport ? lib.hasSuffix "linux" stdenv.hostPlatform.system && !nixosTestRunner
@@ -50,15 +50,16 @@ stdenv.mkDerivation rec {
     sha256 = "1g0pvx4qbirpcn9mni704y03n3lvkmw2c0rbcwvydyr8ns4xh66b";
   };
 
-  nativeBuildInputs = [ python python.pkgs.sphinx pkg-config flex bison meson ninja autoPatchelfHook ]
-    ++ optionals gtkSupport [ wrapGAppsHook ];
+  nativeBuildInputs = [ python python.pkgs.sphinx pkg-config flex bison meson ninja ]
+    ++ optionals gtkSupport [ wrapGAppsHook ]
+    ++ optionals stdenv.isLinux [ autoPatchelfHook ];
   buildInputs =
     [ zlib glib perl pixman
       vde2 texinfo makeWrapper lzo snappy
       gnutls nettle curl
     ]
     ++ optionals ncursesSupport [ ncurses ]
-    ++ optionals stdenv.isDarwin [ CoreServices Cocoa Hypervisor rez setfile ]
+    ++ optionals stdenv.isDarwin [ CoreServices Cocoa CloudKit CoreLocation CoreAudio CoreAudioTypes Hypervisor rez setfile ]
     ++ optionals seccompSupport [ libseccomp ]
     ++ optionals numaSupport [ numactl ]
     ++ optionals pulseSupport [ libpulseaudio ]
@@ -108,6 +109,9 @@ stdenv.mkDerivation rec {
     # this script isn't marked as executable b/c it's indirectly used by meson. Needed to patch its shebang
     chmod +x ./scripts/shaderinclude.pl
     patchShebangs .
+    mv VERSION QEMU_VERSION
+    substituteInPlace meson.build \
+      --replace "'VERSION'" "'QEMU_VERSION'"
   '' + optionalString stdenv.hostPlatform.isMusl ''
     NIX_CFLAGS_COMPILE+=" -D_LINUX_SYSINFO_H"
   '';
@@ -119,7 +123,7 @@ stdenv.mkDerivation rec {
       "--enable-guest-agent"
     ]
     # disable sysctl check on darwin.
-    ++ optional stdenv.isDarwin "--cpu=x86_64"
+    # ++ optional stdenv.isDarwin "--cpu=x86_64"
     ++ optional numaSupport "--enable-numa"
     ++ optional seccompSupport "--enable-seccomp"
     ++ optional smartcardSupport "--enable-smartcard"
