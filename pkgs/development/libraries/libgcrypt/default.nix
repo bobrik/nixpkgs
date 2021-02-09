@@ -28,7 +28,8 @@ stdenv.mkDerivation rec {
     ++ lib.optional enableCapabilities libcap;
 
   configureFlags = [ "--with-libgpg-error-prefix=${libgpgerror.dev}" ]
-   ++ lib.optional stdenv.hostPlatform.isMusl "--disable-asm";
+   ++ lib.optional stdenv.hostPlatform.isMusl "--disable-asm"
+   ++ lib.optional (lib.versionOlder version "1.9.1" &&stdenv.hostPlatform.isDarwin && stdenv.hostPlatform.isAarch64) "--disable-asm";
 
   # Necessary to generate correct assembly when compiling for aarch32 on
   # aarch64
