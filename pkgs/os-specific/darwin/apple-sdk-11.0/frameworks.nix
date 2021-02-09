@@ -26,7 +26,7 @@
   CallKit                          = {};
   Carbon                           = { inherit ApplicationServices CoreServices Foundation IOKit QuartzCore Security libobjc; };
   ClassKit                         = {};
-  CloudKit                         = {};
+  CloudKit                         = { inherit CoreLocation; };
   Cocoa                            = { inherit AppKit CoreData; };
   Collaboration                    = {};
   ColorSync                        = {};
@@ -37,7 +37,7 @@
   CoreAudioKit                     = { inherit AudioUnit; };
   CoreAudioTypes                   = {};
   CoreBluetooth                    = {};
-  CoreData                         = {};
+  CoreData                         = { inherit CloudKit; };
   CoreDisplay                      = {};
   CoreFoundation                   = { inherit libobjc; };
   CoreGraphics                     = { inherit Accelerate IOKit IOSurface SystemConfiguration; };
