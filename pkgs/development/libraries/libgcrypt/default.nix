@@ -39,7 +39,8 @@ stdenv.mkDerivation rec {
   strictDeps = true;
 
   configureFlags = [ "--with-libgpg-error-prefix=${libgpgerror.dev}" ]
-   ++ lib.optional stdenv.hostPlatform.isMusl "--disable-asm";
+   ++ lib.optional stdenv.hostPlatform.isMusl "--disable-asm"
+   ++ lib.optional (stdenv.hostPlatform.isDarwin && stdenv.hostPlatform.isAarch64) "--disable-asm"; # https://dev.gnupg.org/T5157
 
   # Necessary to generate correct assembly when compiling for aarch32 on
   # aarch64
