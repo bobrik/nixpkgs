@@ -32,7 +32,9 @@ stdenv.mkDerivation rec {
   ] ++ lib.optional stdenv.cc.isClang "-Wno-error");
 
   # Indirectly: https://bugs.freedesktop.org/show_bug.cgi?id=35268
-  configureFlags  = lib.optional stdenv.hostPlatform.isMusl "--disable-tls";
+  configureFlags  = []
+    ++ lib.optional stdenv.hostPlatform.isMusl "--disable-tls"
+    ++ lib.optional (stdenv.hostPlatform.isDarwin && stdenv.hostPlatform.isAarch64) "--disable-asm";
 
   outputs = [ "out" "dev" ];
 
