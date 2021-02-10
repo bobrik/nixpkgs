@@ -13,6 +13,10 @@ stdenv.mkDerivation rec {
 
   src = fetch pname "19rcv25y41ww3zlfg0lwprzijl3cn7jgc0v5540jzpp7j0ds45ad";
 
+  patches = [
+    ./openmp-aarch64-darwin.patch
+  ];
+
   nativeBuildInputs = [ cmake perl ];
   buildInputs = [ llvm ];
 
