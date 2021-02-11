@@ -1,0 +1,4120 @@
+From 8c4ac3a86c01d3c5d1ab4ff003b6cb6157baf585 Mon Sep 17 00:00:00 2001
+From: Alexander Graf <agraf@csgraf.de>
+Date: Wed, 20 Jan 2021 23:44:34 +0100
+Subject: [PATCH 01/11] hvf: Add hypervisor entitlement to output binaries
+
+In macOS 11, QEMU only gets access to Hypervisor.framework if it has the
+respective entitlement. Add an entitlement template and automatically self
+sign and apply the entitlement in the build.
+
+Signed-off-by: Alexander Graf <agraf@csgraf.de>
+Reviewed-by: Roman Bolshakov <r.bolshakov@yadro.com>
+Tested-by: Roman Bolshakov <r.bolshakov@yadro.com>
+
+Message-Id: <20210120224444.71840-2-agraf@csgraf.de>
+---
+ accel/hvf/entitlements.plist |  8 ++++++++
+ meson.build                  | 29 +++++++++++++++++++++++++----
+ scripts/entitlement.sh       | 13 +++++++++++++
+ 3 files changed, 46 insertions(+), 4 deletions(-)
+ create mode 100644 accel/hvf/entitlements.plist
+ create mode 100755 scripts/entitlement.sh
+
+diff --git a/accel/hvf/entitlements.plist b/accel/hvf/entitlements.plist
+new file mode 100644
+index 00000000000..154f3308ef2
+--- /dev/null
++++ b/accel/hvf/entitlements.plist
+@@ -0,0 +1,8 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
++<plist version="1.0">
++<dict>
++    <key>com.apple.security.hypervisor</key>
++    <true/>
++</dict>
++</plist>
+diff --git a/meson.build b/meson.build
+index a58c6f67854..15181e450c9 100644
+--- a/meson.build
++++ b/meson.build
+@@ -2164,9 +2164,14 @@ foreach target : target_dirs
+     }]
+   endif
+   foreach exe: execs
+-    emulators += {exe['name']:
+-         executable(exe['name'], exe['sources'],
+-               install: true,
++    exe_name = exe['name']
++    exe_sign = 'CONFIG_HVF' in config_target
++    if exe_sign
++      exe_name += '-unsigned'
++    endif
++
++    emulator = executable(exe_name, exe['sources'],
++               install: not exe_sign,
+                c_args: c_args,
+                dependencies: arch_deps + deps + exe['dependencies'],
+                objects: lib.extract_all_objects(recursive: true),
+@@ -2174,7 +2179,23 @@ foreach target : target_dirs
+                link_depends: [block_syms, qemu_syms] + exe.get('link_depends', []),
+                link_args: link_args,
+                gui_app: exe['gui'])
+-    }
++
++    if exe_sign
++      emulators += {exe['name'] : custom_target(exe['name'],
++                   install: true,
++                   install_dir: get_option('bindir'),
++                   depends: emulator,
++                   output: exe['name'],
++                   command: [
++                     meson.current_source_dir() / 'scripts/entitlement.sh',
++                     meson.current_build_dir() / exe_name,
++                     meson.current_build_dir() / exe['name'],
++                     meson.current_source_dir() / 'accel/hvf/entitlements.plist'
++                   ])
++      }
++    else
++      emulators += {exe['name']: emulator}
++    endif
+ 
+     if 'CONFIG_TRACE_SYSTEMTAP' in config_host
+       foreach stp: [
+diff --git a/scripts/entitlement.sh b/scripts/entitlement.sh
+new file mode 100755
+index 00000000000..c540fa6435f
+--- /dev/null
++++ b/scripts/entitlement.sh
+@@ -0,0 +1,13 @@
++#!/bin/sh -e
++#
++# Helper script for the build process to apply entitlements
++
++SRC="$1"
++DST="$2"
++ENTITLEMENT="$3"
++
++trap 'rm "$DST.tmp"' exit
++cp -af "$SRC" "$DST.tmp"
++codesign --entitlements "$ENTITLEMENT" --force -s - "$DST.tmp"
++mv "$DST.tmp" "$DST"
++trap '' exit
+
+From 1fdac4b2484d8e7305e23b6cf2a030f4978cb9ec Mon Sep 17 00:00:00 2001
+From: Alexander Graf <agraf@csgraf.de>
+Date: Wed, 20 Jan 2021 23:44:35 +0100
+Subject: [PATCH 02/11] hvf: x86: Remove unused definitions
+
+The hvf i386 has a few struct and cpp definitions that are never
+used. Remove them.
+
+Suggested-by: Roman Bolshakov <r.bolshakov@yadro.com>
+Signed-off-by: Alexander Graf <agraf@csgraf.de>
+Reviewed-by: Roman Bolshakov <r.bolshakov@yadro.com>
+Tested-by: Roman Bolshakov <r.bolshakov@yadro.com>
+Message-Id: <20210120224444.71840-3-agraf@csgraf.de>
+---
+ target/i386/hvf/hvf-i386.h | 16 ----------------
+ 1 file changed, 16 deletions(-)
+
+diff --git a/target/i386/hvf/hvf-i386.h b/target/i386/hvf/hvf-i386.h
+index e0edffd077a..e31938e5ff8 100644
+--- a/target/i386/hvf/hvf-i386.h
++++ b/target/i386/hvf/hvf-i386.h
+@@ -21,21 +21,6 @@
+ #include "cpu.h"
+ #include "x86.h"
+ 
+-#define HVF_MAX_VCPU 0x10
+-
+-extern struct hvf_state hvf_global;
+-
+-struct hvf_vm {
+-    int id;
+-    struct hvf_vcpu_state *vcpus[HVF_MAX_VCPU];
+-};
+-
+-struct hvf_state {
+-    uint32_t version;
+-    struct hvf_vm *vm;
+-    uint64_t mem_quota;
+-};
+-
+ /* hvf_slot flags */
+ #define HVF_SLOT_LOG (1 << 0)
+ 
+@@ -75,7 +60,6 @@ hvf_slot *hvf_find_overlap_slot(uint64_t, uint64_t);
+ 
+ /* Host specific functions */
+ int hvf_inject_interrupt(CPUArchState *env, int vector);
+-int hvf_vcpu_run(struct hvf_vcpu_state *vcpu);
+ #endif
+ 
+ #endif
+
+From 210ea0f09e704693f2770bc4c1dbcfb0210502a0 Mon Sep 17 00:00:00 2001
+From: Alexander Graf <agraf@csgraf.de>
+Date: Wed, 20 Jan 2021 23:44:36 +0100
+Subject: [PATCH 03/11] hvf: Move common code out
+
+Until now, Hypervisor.framework has only been available on x86_64 systems.
+With Apple Silicon shipping now, it extends its reach to aarch64. To
+prepare for support for multiple architectures, let's move common code out
+into its own accel directory.
+
+Signed-off-by: Alexander Graf <agraf@csgraf.de>
+Reviewed-by: Roman Bolshakov <r.bolshakov@yadro.com>
+Tested-by: Roman Bolshakov <r.bolshakov@yadro.com>
+
+Message-Id: <20210120224444.71840-4-agraf@csgraf.de>
+---
+ MAINTAINERS                 |   8 +
+ accel/hvf/hvf-all.c         |  54 +++++
+ accel/hvf/hvf-cpus.c        | 462 ++++++++++++++++++++++++++++++++++++
+ accel/hvf/meson.build       |   7 +
+ accel/meson.build           |   1 +
+ include/sysemu/hvf_int.h    |  54 +++++
+ target/i386/hvf/hvf-cpus.c  | 131 ----------
+ target/i386/hvf/hvf-cpus.h  |  25 --
+ target/i386/hvf/hvf-i386.h  |  33 +--
+ target/i386/hvf/hvf.c       | 360 +---------------------------
+ target/i386/hvf/meson.build |   1 -
+ target/i386/hvf/x86hvf.c    |  11 +-
+ target/i386/hvf/x86hvf.h    |   2 -
+ 13 files changed, 596 insertions(+), 553 deletions(-)
+ create mode 100644 accel/hvf/hvf-all.c
+ create mode 100644 accel/hvf/hvf-cpus.c
+ create mode 100644 accel/hvf/meson.build
+ create mode 100644 include/sysemu/hvf_int.h
+ delete mode 100644 target/i386/hvf/hvf-cpus.c
+ delete mode 100644 target/i386/hvf/hvf-cpus.h
+
+diff --git a/MAINTAINERS b/MAINTAINERS
+index 34359a99b8e..bf8fe6aa843 100644
+--- a/MAINTAINERS
++++ b/MAINTAINERS
+@@ -448,7 +448,15 @@ M: Roman Bolshakov <r.bolshakov@yadro.com>
+ W: https://wiki.qemu.org/Features/HVF
+ S: Maintained
+ F: target/i386/hvf/
++
++HVF
++M: Cameron Esfahani <dirty@apple.com>
++M: Roman Bolshakov <r.bolshakov@yadro.com>
++W: https://wiki.qemu.org/Features/HVF
++S: Maintained
++F: accel/hvf/
+ F: include/sysemu/hvf.h
++F: include/sysemu/hvf_int.h
+ 
+ WHPX CPUs
+ M: Sunil Muthuswamy <sunilmut@microsoft.com>
+diff --git a/accel/hvf/hvf-all.c b/accel/hvf/hvf-all.c
+new file mode 100644
+index 00000000000..5b415eb0ed8
+--- /dev/null
++++ b/accel/hvf/hvf-all.c
+@@ -0,0 +1,54 @@
++/*
++ * QEMU Hypervisor.framework support
++ *
++ * This work is licensed under the terms of the GNU GPL, version 2.  See
++ * the COPYING file in the top-level directory.
++ *
++ * Contributions after 2012-01-13 are licensed under the terms of the
++ * GNU GPL, version 2 or (at your option) any later version.
++ */
++
++#include "qemu/osdep.h"
++#include "qemu-common.h"
++#include "qemu/error-report.h"
++#include "sysemu/hvf.h"
++#include "sysemu/hvf_int.h"
++#include "sysemu/runstate.h"
++
++#include "qemu/main-loop.h"
++#include "sysemu/accel.h"
++
++bool hvf_allowed;
++HVFState *hvf_state;
++
++void assert_hvf_ok(hv_return_t ret)
++{
++    if (ret == HV_SUCCESS) {
++        return;
++    }
++
++    switch (ret) {
++    case HV_ERROR:
++        error_report("Error: HV_ERROR");
++        break;
++    case HV_BUSY:
++        error_report("Error: HV_BUSY");
++        break;
++    case HV_BAD_ARGUMENT:
++        error_report("Error: HV_BAD_ARGUMENT");
++        break;
++    case HV_NO_RESOURCES:
++        error_report("Error: HV_NO_RESOURCES");
++        break;
++    case HV_NO_DEVICE:
++        error_report("Error: HV_NO_DEVICE");
++        break;
++    case HV_UNSUPPORTED:
++        error_report("Error: HV_UNSUPPORTED");
++        break;
++    default:
++        error_report("Unknown Error");
++    }
++
++    abort();
++}
+diff --git a/accel/hvf/hvf-cpus.c b/accel/hvf/hvf-cpus.c
+new file mode 100644
+index 00000000000..60f6d76bf3e
+--- /dev/null
++++ b/accel/hvf/hvf-cpus.c
+@@ -0,0 +1,462 @@
++/*
++ * Copyright 2008 IBM Corporation
++ *           2008 Red Hat, Inc.
++ * Copyright 2011 Intel Corporation
++ * Copyright 2016 Veertu, Inc.
++ * Copyright 2017 The Android Open Source Project
++ *
++ * QEMU Hypervisor.framework support
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of version 2 of the GNU General Public
++ * License as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, see <http://www.gnu.org/licenses/>.
++ *
++ * This file contain code under public domain from the hvdos project:
++ * https://github.com/mist64/hvdos
++ *
++ * Parts Copyright (c) 2011 NetApp, Inc.
++ * All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY NETAPP, INC ``AS IS'' AND
++ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++ * ARE DISCLAIMED.  IN NO EVENT SHALL NETAPP, INC OR CONTRIBUTORS BE LIABLE
++ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
++ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
++ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
++ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
++ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
++ * SUCH DAMAGE.
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/error-report.h"
++#include "qemu/main-loop.h"
++#include "exec/address-spaces.h"
++#include "exec/exec-all.h"
++#include "sysemu/cpus.h"
++#include "sysemu/hvf.h"
++#include "sysemu/hvf_int.h"
++#include "sysemu/runstate.h"
++#include "qemu/guest-random.h"
++
++/* Memory slots */
++
++struct mac_slot {
++    int present;
++    uint64_t size;
++    uint64_t gpa_start;
++    uint64_t gva;
++};
++
++hvf_slot *hvf_find_overlap_slot(uint64_t start, uint64_t size)
++{
++    hvf_slot *slot;
++    int x;
++    for (x = 0; x < hvf_state->num_slots; ++x) {
++        slot = &hvf_state->slots[x];
++        if (slot->size && start < (slot->start + slot->size) &&
++            (start + size) > slot->start) {
++            return slot;
++        }
++    }
++    return NULL;
++}
++
++struct mac_slot mac_slots[32];
++
++static int do_hvf_set_memory(hvf_slot *slot, hv_memory_flags_t flags)
++{
++    struct mac_slot *macslot;
++    hv_return_t ret;
++
++    macslot = &mac_slots[slot->slot_id];
++
++    if (macslot->present) {
++        if (macslot->size != slot->size) {
++            macslot->present = 0;
++            ret = hv_vm_unmap(macslot->gpa_start, macslot->size);
++            assert_hvf_ok(ret);
++        }
++    }
++
++    if (!slot->size) {
++        return 0;
++    }
++
++    macslot->present = 1;
++    macslot->gpa_start = slot->start;
++    macslot->size = slot->size;
++    ret = hv_vm_map(slot->mem, slot->start, slot->size, flags);
++    assert_hvf_ok(ret);
++    return 0;
++}
++
++static void hvf_set_phys_mem(MemoryRegionSection *section, bool add)
++{
++    hvf_slot *mem;
++    MemoryRegion *area = section->mr;
++    bool writeable = !area->readonly && !area->rom_device;
++    hv_memory_flags_t flags;
++
++    if (!memory_region_is_ram(area)) {
++        if (writeable) {
++            return;
++        } else if (!memory_region_is_romd(area)) {
++            /*
++             * If the memory device is not in romd_mode, then we actually want
++             * to remove the hvf memory slot so all accesses will trap.
++             */
++             add = false;
++        }
++    }
++
++    mem = hvf_find_overlap_slot(
++            section->offset_within_address_space,
++            int128_get64(section->size));
++
++    if (mem && add) {
++        if (mem->size == int128_get64(section->size) &&
++            mem->start == section->offset_within_address_space &&
++            mem->mem == (memory_region_get_ram_ptr(area) +
++            section->offset_within_region)) {
++            return; /* Same region was attempted to register, go away. */
++        }
++    }
++
++    /* Region needs to be reset. set the size to 0 and remap it. */
++    if (mem) {
++        mem->size = 0;
++        if (do_hvf_set_memory(mem, 0)) {
++            error_report("Failed to reset overlapping slot");
++            abort();
++        }
++    }
++
++    if (!add) {
++        return;
++    }
++
++    if (area->readonly ||
++        (!memory_region_is_ram(area) && memory_region_is_romd(area))) {
++        flags = HV_MEMORY_READ | HV_MEMORY_EXEC;
++    } else {
++        flags = HV_MEMORY_READ | HV_MEMORY_WRITE | HV_MEMORY_EXEC;
++    }
++
++    /* Now make a new slot. */
++    int x;
++
++    for (x = 0; x < hvf_state->num_slots; ++x) {
++        mem = &hvf_state->slots[x];
++        if (!mem->size) {
++            break;
++        }
++    }
++
++    if (x == hvf_state->num_slots) {
++        error_report("No free slots");
++        abort();
++    }
++
++    mem->size = int128_get64(section->size);
++    mem->mem = memory_region_get_ram_ptr(area) + section->offset_within_region;
++    mem->start = section->offset_within_address_space;
++    mem->region = area;
++
++    if (do_hvf_set_memory(mem, flags)) {
++        error_report("Error registering new memory slot");
++        abort();
++    }
++}
++
++static void hvf_set_dirty_tracking(MemoryRegionSection *section, bool on)
++{
++    hvf_slot *slot;
++
++    slot = hvf_find_overlap_slot(
++            section->offset_within_address_space,
++            int128_get64(section->size));
++
++    /* protect region against writes; begin tracking it */
++    if (on) {
++        slot->flags |= HVF_SLOT_LOG;
++        hv_vm_protect((uintptr_t)slot->start, (size_t)slot->size,
++                      HV_MEMORY_READ);
++    /* stop tracking region*/
++    } else {
++        slot->flags &= ~HVF_SLOT_LOG;
++        hv_vm_protect((uintptr_t)slot->start, (size_t)slot->size,
++                      HV_MEMORY_READ | HV_MEMORY_WRITE);
++    }
++}
++
++static void hvf_log_start(MemoryListener *listener,
++                          MemoryRegionSection *section, int old, int new)
++{
++    if (old != 0) {
++        return;
++    }
++
++    hvf_set_dirty_tracking(section, 1);
++}
++
++static void hvf_log_stop(MemoryListener *listener,
++                         MemoryRegionSection *section, int old, int new)
++{
++    if (new != 0) {
++        return;
++    }
++
++    hvf_set_dirty_tracking(section, 0);
++}
++
++static void hvf_log_sync(MemoryListener *listener,
++                         MemoryRegionSection *section)
++{
++    /*
++     * sync of dirty pages is handled elsewhere; just make sure we keep
++     * tracking the region.
++     */
++    hvf_set_dirty_tracking(section, 1);
++}
++
++static void hvf_region_add(MemoryListener *listener,
++                           MemoryRegionSection *section)
++{
++    hvf_set_phys_mem(section, true);
++}
++
++static void hvf_region_del(MemoryListener *listener,
++                           MemoryRegionSection *section)
++{
++    hvf_set_phys_mem(section, false);
++}
++
++static MemoryListener hvf_memory_listener = {
++    .priority = 10,
++    .region_add = hvf_region_add,
++    .region_del = hvf_region_del,
++    .log_start = hvf_log_start,
++    .log_stop = hvf_log_stop,
++    .log_sync = hvf_log_sync,
++};
++
++static void do_hvf_cpu_synchronize_state(CPUState *cpu, run_on_cpu_data arg)
++{
++    if (!cpu->vcpu_dirty) {
++        hvf_get_registers(cpu);
++        cpu->vcpu_dirty = true;
++    }
++}
++
++static void hvf_cpu_synchronize_state(CPUState *cpu)
++{
++    if (!cpu->vcpu_dirty) {
++        run_on_cpu(cpu, do_hvf_cpu_synchronize_state, RUN_ON_CPU_NULL);
++    }
++}
++
++static void do_hvf_cpu_synchronize_post_reset(CPUState *cpu,
++                                              run_on_cpu_data arg)
++{
++    hvf_put_registers(cpu);
++    cpu->vcpu_dirty = false;
++}
++
++static void hvf_cpu_synchronize_post_reset(CPUState *cpu)
++{
++    run_on_cpu(cpu, do_hvf_cpu_synchronize_post_reset, RUN_ON_CPU_NULL);
++}
++
++static void do_hvf_cpu_synchronize_post_init(CPUState *cpu,
++                                             run_on_cpu_data arg)
++{
++    hvf_put_registers(cpu);
++    cpu->vcpu_dirty = false;
++}
++
++static void hvf_cpu_synchronize_post_init(CPUState *cpu)
++{
++    run_on_cpu(cpu, do_hvf_cpu_synchronize_post_init, RUN_ON_CPU_NULL);
++}
++
++static void do_hvf_cpu_synchronize_pre_loadvm(CPUState *cpu,
++                                              run_on_cpu_data arg)
++{
++    cpu->vcpu_dirty = true;
++}
++
++static void hvf_cpu_synchronize_pre_loadvm(CPUState *cpu)
++{
++    run_on_cpu(cpu, do_hvf_cpu_synchronize_pre_loadvm, RUN_ON_CPU_NULL);
++}
++
++static void hvf_vcpu_destroy(CPUState *cpu)
++{
++    hv_return_t ret = hv_vcpu_destroy(cpu->hvf_fd);
++    assert_hvf_ok(ret);
++
++    hvf_arch_vcpu_destroy(cpu);
++}
++
++static void dummy_signal(int sig)
++{
++}
++
++static int hvf_init_vcpu(CPUState *cpu)
++{
++    int r;
++
++    /* init cpu signals */
++    sigset_t set;
++    struct sigaction sigact;
++
++    memset(&sigact, 0, sizeof(sigact));
++    sigact.sa_handler = dummy_signal;
++    sigaction(SIG_IPI, &sigact, NULL);
++
++    pthread_sigmask(SIG_BLOCK, NULL, &set);
++    sigdelset(&set, SIG_IPI);
++
++    r = hv_vcpu_create((hv_vcpuid_t *)&cpu->hvf_fd, HV_VCPU_DEFAULT);
++    cpu->vcpu_dirty = 1;
++    assert_hvf_ok(r);
++
++    return hvf_arch_init_vcpu(cpu);
++}
++
++/*
++ * The HVF-specific vCPU thread function. This one should only run when the host
++ * CPU supports the VMX "unrestricted guest" feature.
++ */
++static void *hvf_cpu_thread_fn(void *arg)
++{
++    CPUState *cpu = arg;
++
++    int r;
++
++    assert(hvf_enabled());
++
++    rcu_register_thread();
++
++    qemu_mutex_lock_iothread();
++    qemu_thread_get_self(cpu->thread);
++
++    cpu->thread_id = qemu_get_thread_id();
++    cpu->can_do_io = 1;
++    current_cpu = cpu;
++
++    hvf_init_vcpu(cpu);
++
++    /* signal CPU creation */
++    cpu_thread_signal_created(cpu);
++    qemu_guest_random_seed_thread_part2(cpu->random_seed);
++
++    do {
++        if (cpu_can_run(cpu)) {
++            r = hvf_vcpu_exec(cpu);
++            if (r == EXCP_DEBUG) {
++                cpu_handle_guest_debug(cpu);
++            }
++        }
++        qemu_wait_io_event(cpu);
++    } while (!cpu->unplug || cpu_can_run(cpu));
++
++    hvf_vcpu_destroy(cpu);
++    cpu_thread_signal_destroyed(cpu);
++    qemu_mutex_unlock_iothread();
++    rcu_unregister_thread();
++    return NULL;
++}
++
++static void hvf_start_vcpu_thread(CPUState *cpu)
++{
++    char thread_name[VCPU_THREAD_NAME_SIZE];
++
++    /*
++     * HVF currently does not support TCG, and only runs in
++     * unrestricted-guest mode.
++     */
++    assert(hvf_enabled());
++
++    cpu->thread = g_malloc0(sizeof(QemuThread));
++    cpu->halt_cond = g_malloc0(sizeof(QemuCond));
++    qemu_cond_init(cpu->halt_cond);
++
++    snprintf(thread_name, VCPU_THREAD_NAME_SIZE, "CPU %d/HVF",
++             cpu->cpu_index);
++    qemu_thread_create(cpu->thread, thread_name, hvf_cpu_thread_fn,
++                       cpu, QEMU_THREAD_JOINABLE);
++}
++
++static const CpusAccel hvf_cpus = {
++    .create_vcpu_thread = hvf_start_vcpu_thread,
++
++    .synchronize_post_reset = hvf_cpu_synchronize_post_reset,
++    .synchronize_post_init = hvf_cpu_synchronize_post_init,
++    .synchronize_state = hvf_cpu_synchronize_state,
++    .synchronize_pre_loadvm = hvf_cpu_synchronize_pre_loadvm,
++};
++
++static int hvf_accel_init(MachineState *ms)
++{
++    int x;
++    hv_return_t ret;
++    HVFState *s;
++
++    ret = hv_vm_create(HV_VM_DEFAULT);
++    assert_hvf_ok(ret);
++
++    s = g_new0(HVFState, 1);
++
++    s->num_slots = 32;
++    for (x = 0; x < s->num_slots; ++x) {
++        s->slots[x].size = 0;
++        s->slots[x].slot_id = x;
++    }
++
++    hvf_state = s;
++    memory_listener_register(&hvf_memory_listener, &address_space_memory);
++    cpus_register_accel(&hvf_cpus);
++    return 0;
++}
++
++static void hvf_accel_class_init(ObjectClass *oc, void *data)
++{
++    AccelClass *ac = ACCEL_CLASS(oc);
++    ac->name = "HVF";
++    ac->init_machine = hvf_accel_init;
++    ac->allowed = &hvf_allowed;
++}
++
++static const TypeInfo hvf_accel_type = {
++    .name = TYPE_HVF_ACCEL,
++    .parent = TYPE_ACCEL,
++    .class_init = hvf_accel_class_init,
++};
++
++static void hvf_type_init(void)
++{
++    type_register_static(&hvf_accel_type);
++}
++
++type_init(hvf_type_init);
+diff --git a/accel/hvf/meson.build b/accel/hvf/meson.build
+new file mode 100644
+index 00000000000..dfd6b68dc79
+--- /dev/null
++++ b/accel/hvf/meson.build
+@@ -0,0 +1,7 @@
++hvf_ss = ss.source_set()
++hvf_ss.add(files(
++  'hvf-all.c',
++  'hvf-cpus.c',
++))
++
++specific_ss.add_all(when: 'CONFIG_HVF', if_true: hvf_ss)
+diff --git a/accel/meson.build b/accel/meson.build
+index b26cca227a4..6de12ce5d58 100644
+--- a/accel/meson.build
++++ b/accel/meson.build
+@@ -1,5 +1,6 @@
+ softmmu_ss.add(files('accel.c'))
+ 
++subdir('hvf')
+ subdir('qtest')
+ subdir('kvm')
+ subdir('tcg')
+diff --git a/include/sysemu/hvf_int.h b/include/sysemu/hvf_int.h
+new file mode 100644
+index 00000000000..69de46db7d2
+--- /dev/null
++++ b/include/sysemu/hvf_int.h
+@@ -0,0 +1,54 @@
++/*
++ * QEMU Hypervisor.framework (HVF) support
++ *
++ * This work is licensed under the terms of the GNU GPL, version 2 or later.
++ * See the COPYING file in the top-level directory.
++ *
++ */
++
++/* header to be included in HVF-specific code */
++
++#ifndef HVF_INT_H
++#define HVF_INT_H
++
++#include <Hypervisor/hv.h>
++
++/* hvf_slot flags */
++#define HVF_SLOT_LOG (1 << 0)
++
++typedef struct hvf_slot {
++    uint64_t start;
++    uint64_t size;
++    uint8_t *mem;
++    int slot_id;
++    uint32_t flags;
++    MemoryRegion *region;
++} hvf_slot;
++
++typedef struct hvf_vcpu_caps {
++    uint64_t vmx_cap_pinbased;
++    uint64_t vmx_cap_procbased;
++    uint64_t vmx_cap_procbased2;
++    uint64_t vmx_cap_entry;
++    uint64_t vmx_cap_exit;
++    uint64_t vmx_cap_preemption_timer;
++} hvf_vcpu_caps;
++
++struct HVFState {
++    AccelState parent;
++    hvf_slot slots[32];
++    int num_slots;
++
++    hvf_vcpu_caps *hvf_caps;
++};
++extern HVFState *hvf_state;
++
++void assert_hvf_ok(hv_return_t ret);
++int hvf_get_registers(CPUState *cpu);
++int hvf_put_registers(CPUState *cpu);
++int hvf_arch_init_vcpu(CPUState *cpu);
++void hvf_arch_vcpu_destroy(CPUState *cpu);
++int hvf_vcpu_exec(CPUState *cpu);
++hvf_slot *hvf_find_overlap_slot(uint64_t, uint64_t);
++
++#endif
+diff --git a/target/i386/hvf/hvf-cpus.c b/target/i386/hvf/hvf-cpus.c
+deleted file mode 100644
+index 817b3d74529..00000000000
+--- a/target/i386/hvf/hvf-cpus.c
++++ /dev/null
+@@ -1,131 +0,0 @@
+-/*
+- * Copyright 2008 IBM Corporation
+- *           2008 Red Hat, Inc.
+- * Copyright 2011 Intel Corporation
+- * Copyright 2016 Veertu, Inc.
+- * Copyright 2017 The Android Open Source Project
+- *
+- * QEMU Hypervisor.framework support
+- *
+- * This program is free software; you can redistribute it and/or
+- * modify it under the terms of version 2 of the GNU General Public
+- * License as published by the Free Software Foundation.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+- * General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program; if not, see <http://www.gnu.org/licenses/>.
+- *
+- * This file contain code under public domain from the hvdos project:
+- * https://github.com/mist64/hvdos
+- *
+- * Parts Copyright (c) 2011 NetApp, Inc.
+- * All rights reserved.
+- *
+- * Redistribution and use in source and binary forms, with or without
+- * modification, are permitted provided that the following conditions
+- * are met:
+- * 1. Redistributions of source code must retain the above copyright
+- *    notice, this list of conditions and the following disclaimer.
+- * 2. Redistributions in binary form must reproduce the above copyright
+- *    notice, this list of conditions and the following disclaimer in the
+- *    documentation and/or other materials provided with the distribution.
+- *
+- * THIS SOFTWARE IS PROVIDED BY NETAPP, INC ``AS IS'' AND
+- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+- * ARE DISCLAIMED.  IN NO EVENT SHALL NETAPP, INC OR CONTRIBUTORS BE LIABLE
+- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+- * SUCH DAMAGE.
+- */
+-
+-#include "qemu/osdep.h"
+-#include "qemu/error-report.h"
+-#include "qemu/main-loop.h"
+-#include "sysemu/hvf.h"
+-#include "sysemu/runstate.h"
+-#include "target/i386/cpu.h"
+-#include "qemu/guest-random.h"
+-
+-#include "hvf-cpus.h"
+-
+-/*
+- * The HVF-specific vCPU thread function. This one should only run when the host
+- * CPU supports the VMX "unrestricted guest" feature.
+- */
+-static void *hvf_cpu_thread_fn(void *arg)
+-{
+-    CPUState *cpu = arg;
+-
+-    int r;
+-
+-    assert(hvf_enabled());
+-
+-    rcu_register_thread();
+-
+-    qemu_mutex_lock_iothread();
+-    qemu_thread_get_self(cpu->thread);
+-
+-    cpu->thread_id = qemu_get_thread_id();
+-    cpu->can_do_io = 1;
+-    current_cpu = cpu;
+-
+-    hvf_init_vcpu(cpu);
+-
+-    /* signal CPU creation */
+-    cpu_thread_signal_created(cpu);
+-    qemu_guest_random_seed_thread_part2(cpu->random_seed);
+-
+-    do {
+-        if (cpu_can_run(cpu)) {
+-            r = hvf_vcpu_exec(cpu);
+-            if (r == EXCP_DEBUG) {
+-                cpu_handle_guest_debug(cpu);
+-            }
+-        }
+-        qemu_wait_io_event(cpu);
+-    } while (!cpu->unplug || cpu_can_run(cpu));
+-
+-    hvf_vcpu_destroy(cpu);
+-    cpu_thread_signal_destroyed(cpu);
+-    qemu_mutex_unlock_iothread();
+-    rcu_unregister_thread();
+-    return NULL;
+-}
+-
+-static void hvf_start_vcpu_thread(CPUState *cpu)
+-{
+-    char thread_name[VCPU_THREAD_NAME_SIZE];
+-
+-    /*
+-     * HVF currently does not support TCG, and only runs in
+-     * unrestricted-guest mode.
+-     */
+-    assert(hvf_enabled());
+-
+-    cpu->thread = g_malloc0(sizeof(QemuThread));
+-    cpu->halt_cond = g_malloc0(sizeof(QemuCond));
+-    qemu_cond_init(cpu->halt_cond);
+-
+-    snprintf(thread_name, VCPU_THREAD_NAME_SIZE, "CPU %d/HVF",
+-             cpu->cpu_index);
+-    qemu_thread_create(cpu->thread, thread_name, hvf_cpu_thread_fn,
+-                       cpu, QEMU_THREAD_JOINABLE);
+-}
+-
+-const CpusAccel hvf_cpus = {
+-    .create_vcpu_thread = hvf_start_vcpu_thread,
+-
+-    .synchronize_post_reset = hvf_cpu_synchronize_post_reset,
+-    .synchronize_post_init = hvf_cpu_synchronize_post_init,
+-    .synchronize_state = hvf_cpu_synchronize_state,
+-    .synchronize_pre_loadvm = hvf_cpu_synchronize_pre_loadvm,
+-};
+diff --git a/target/i386/hvf/hvf-cpus.h b/target/i386/hvf/hvf-cpus.h
+deleted file mode 100644
+index ced31b82c0e..00000000000
+--- a/target/i386/hvf/hvf-cpus.h
++++ /dev/null
+@@ -1,25 +0,0 @@
+-/*
+- * Accelerator CPUS Interface
+- *
+- * Copyright 2020 SUSE LLC
+- *
+- * This work is licensed under the terms of the GNU GPL, version 2 or later.
+- * See the COPYING file in the top-level directory.
+- */
+-
+-#ifndef HVF_CPUS_H
+-#define HVF_CPUS_H
+-
+-#include "sysemu/cpus.h"
+-
+-extern const CpusAccel hvf_cpus;
+-
+-int hvf_init_vcpu(CPUState *);
+-int hvf_vcpu_exec(CPUState *);
+-void hvf_cpu_synchronize_state(CPUState *);
+-void hvf_cpu_synchronize_post_reset(CPUState *);
+-void hvf_cpu_synchronize_post_init(CPUState *);
+-void hvf_cpu_synchronize_pre_loadvm(CPUState *);
+-void hvf_vcpu_destroy(CPUState *);
+-
+-#endif /* HVF_CPUS_H */
+diff --git a/target/i386/hvf/hvf-i386.h b/target/i386/hvf/hvf-i386.h
+index e31938e5ff8..f41f9444b4e 100644
+--- a/target/i386/hvf/hvf-i386.h
++++ b/target/i386/hvf/hvf-i386.h
+@@ -18,42 +18,11 @@
+ 
+ #include "sysemu/accel.h"
+ #include "sysemu/hvf.h"
++#include "sysemu/hvf_int.h"
+ #include "cpu.h"
+ #include "x86.h"
+ 
+-/* hvf_slot flags */
+-#define HVF_SLOT_LOG (1 << 0)
+-
+-typedef struct hvf_slot {
+-    uint64_t start;
+-    uint64_t size;
+-    uint8_t *mem;
+-    int slot_id;
+-    uint32_t flags;
+-    MemoryRegion *region;
+-} hvf_slot;
+-
+-typedef struct hvf_vcpu_caps {
+-    uint64_t vmx_cap_pinbased;
+-    uint64_t vmx_cap_procbased;
+-    uint64_t vmx_cap_procbased2;
+-    uint64_t vmx_cap_entry;
+-    uint64_t vmx_cap_exit;
+-    uint64_t vmx_cap_preemption_timer;
+-} hvf_vcpu_caps;
+-
+-struct HVFState {
+-    AccelState parent;
+-    hvf_slot slots[32];
+-    int num_slots;
+-
+-    hvf_vcpu_caps *hvf_caps;
+-};
+-extern HVFState *hvf_state;
+-
+-void hvf_set_phys_mem(MemoryRegionSection *, bool);
+ void hvf_handle_io(CPUArchState *, uint16_t, void *, int, int, int);
+-hvf_slot *hvf_find_overlap_slot(uint64_t, uint64_t);
+ 
+ #ifdef NEED_CPU_H
+ /* Functions exported to host specific mode */
+diff --git a/target/i386/hvf/hvf.c b/target/i386/hvf/hvf.c
+index ed9356565c9..8b96ecd6190 100644
+--- a/target/i386/hvf/hvf.c
++++ b/target/i386/hvf/hvf.c
+@@ -51,6 +51,7 @@
+ #include "qemu/error-report.h"
+ 
+ #include "sysemu/hvf.h"
++#include "sysemu/hvf_int.h"
+ #include "sysemu/runstate.h"
+ #include "hvf-i386.h"
+ #include "vmcs.h"
+@@ -72,171 +73,6 @@
+ #include "sysemu/accel.h"
+ #include "target/i386/cpu.h"
+ 
+-#include "hvf-cpus.h"
+-
+-HVFState *hvf_state;
+-
+-static void assert_hvf_ok(hv_return_t ret)
+-{
+-    if (ret == HV_SUCCESS) {
+-        return;
+-    }
+-
+-    switch (ret) {
+-    case HV_ERROR:
+-        error_report("Error: HV_ERROR");
+-        break;
+-    case HV_BUSY:
+-        error_report("Error: HV_BUSY");
+-        break;
+-    case HV_BAD_ARGUMENT:
+-        error_report("Error: HV_BAD_ARGUMENT");
+-        break;
+-    case HV_NO_RESOURCES:
+-        error_report("Error: HV_NO_RESOURCES");
+-        break;
+-    case HV_NO_DEVICE:
+-        error_report("Error: HV_NO_DEVICE");
+-        break;
+-    case HV_UNSUPPORTED:
+-        error_report("Error: HV_UNSUPPORTED");
+-        break;
+-    default:
+-        error_report("Unknown Error");
+-    }
+-
+-    abort();
+-}
+-
+-/* Memory slots */
+-hvf_slot *hvf_find_overlap_slot(uint64_t start, uint64_t size)
+-{
+-    hvf_slot *slot;
+-    int x;
+-    for (x = 0; x < hvf_state->num_slots; ++x) {
+-        slot = &hvf_state->slots[x];
+-        if (slot->size && start < (slot->start + slot->size) &&
+-            (start + size) > slot->start) {
+-            return slot;
+-        }
+-    }
+-    return NULL;
+-}
+-
+-struct mac_slot {
+-    int present;
+-    uint64_t size;
+-    uint64_t gpa_start;
+-    uint64_t gva;
+-};
+-
+-struct mac_slot mac_slots[32];
+-
+-static int do_hvf_set_memory(hvf_slot *slot, hv_memory_flags_t flags)
+-{
+-    struct mac_slot *macslot;
+-    hv_return_t ret;
+-
+-    macslot = &mac_slots[slot->slot_id];
+-
+-    if (macslot->present) {
+-        if (macslot->size != slot->size) {
+-            macslot->present = 0;
+-            ret = hv_vm_unmap(macslot->gpa_start, macslot->size);
+-            assert_hvf_ok(ret);
+-        }
+-    }
+-
+-    if (!slot->size) {
+-        return 0;
+-    }
+-
+-    macslot->present = 1;
+-    macslot->gpa_start = slot->start;
+-    macslot->size = slot->size;
+-    ret = hv_vm_map((hv_uvaddr_t)slot->mem, slot->start, slot->size, flags);
+-    assert_hvf_ok(ret);
+-    return 0;
+-}
+-
+-void hvf_set_phys_mem(MemoryRegionSection *section, bool add)
+-{
+-    hvf_slot *mem;
+-    MemoryRegion *area = section->mr;
+-    bool writeable = !area->readonly && !area->rom_device;
+-    hv_memory_flags_t flags;
+-
+-    if (!memory_region_is_ram(area)) {
+-        if (writeable) {
+-            return;
+-        } else if (!memory_region_is_romd(area)) {
+-            /*
+-             * If the memory device is not in romd_mode, then we actually want
+-             * to remove the hvf memory slot so all accesses will trap.
+-             */
+-             add = false;
+-        }
+-    }
+-
+-    mem = hvf_find_overlap_slot(
+-            section->offset_within_address_space,
+-            int128_get64(section->size));
+-
+-    if (mem && add) {
+-        if (mem->size == int128_get64(section->size) &&
+-            mem->start == section->offset_within_address_space &&
+-            mem->mem == (memory_region_get_ram_ptr(area) +
+-            section->offset_within_region)) {
+-            return; /* Same region was attempted to register, go away. */
+-        }
+-    }
+-
+-    /* Region needs to be reset. set the size to 0 and remap it. */
+-    if (mem) {
+-        mem->size = 0;
+-        if (do_hvf_set_memory(mem, 0)) {
+-            error_report("Failed to reset overlapping slot");
+-            abort();
+-        }
+-    }
+-
+-    if (!add) {
+-        return;
+-    }
+-
+-    if (area->readonly ||
+-        (!memory_region_is_ram(area) && memory_region_is_romd(area))) {
+-        flags = HV_MEMORY_READ | HV_MEMORY_EXEC;
+-    } else {
+-        flags = HV_MEMORY_READ | HV_MEMORY_WRITE | HV_MEMORY_EXEC;
+-    }
+-
+-    /* Now make a new slot. */
+-    int x;
+-
+-    for (x = 0; x < hvf_state->num_slots; ++x) {
+-        mem = &hvf_state->slots[x];
+-        if (!mem->size) {
+-            break;
+-        }
+-    }
+-
+-    if (x == hvf_state->num_slots) {
+-        error_report("No free slots");
+-        abort();
+-    }
+-
+-    mem->size = int128_get64(section->size);
+-    mem->mem = memory_region_get_ram_ptr(area) + section->offset_within_region;
+-    mem->start = section->offset_within_address_space;
+-    mem->region = area;
+-
+-    if (do_hvf_set_memory(mem, flags)) {
+-        error_report("Error registering new memory slot");
+-        abort();
+-    }
+-}
+-
+ void vmx_update_tpr(CPUState *cpu)
+ {
+     /* TODO: need integrate APIC handling */
+@@ -276,56 +112,6 @@ void hvf_handle_io(CPUArchState *env, uint16_t port, void *buffer,
+     }
+ }
+ 
+-static void do_hvf_cpu_synchronize_state(CPUState *cpu, run_on_cpu_data arg)
+-{
+-    if (!cpu->vcpu_dirty) {
+-        hvf_get_registers(cpu);
+-        cpu->vcpu_dirty = true;
+-    }
+-}
+-
+-void hvf_cpu_synchronize_state(CPUState *cpu)
+-{
+-    if (!cpu->vcpu_dirty) {
+-        run_on_cpu(cpu, do_hvf_cpu_synchronize_state, RUN_ON_CPU_NULL);
+-    }
+-}
+-
+-static void do_hvf_cpu_synchronize_post_reset(CPUState *cpu,
+-                                              run_on_cpu_data arg)
+-{
+-    hvf_put_registers(cpu);
+-    cpu->vcpu_dirty = false;
+-}
+-
+-void hvf_cpu_synchronize_post_reset(CPUState *cpu)
+-{
+-    run_on_cpu(cpu, do_hvf_cpu_synchronize_post_reset, RUN_ON_CPU_NULL);
+-}
+-
+-static void do_hvf_cpu_synchronize_post_init(CPUState *cpu,
+-                                             run_on_cpu_data arg)
+-{
+-    hvf_put_registers(cpu);
+-    cpu->vcpu_dirty = false;
+-}
+-
+-void hvf_cpu_synchronize_post_init(CPUState *cpu)
+-{
+-    run_on_cpu(cpu, do_hvf_cpu_synchronize_post_init, RUN_ON_CPU_NULL);
+-}
+-
+-static void do_hvf_cpu_synchronize_pre_loadvm(CPUState *cpu,
+-                                              run_on_cpu_data arg)
+-{
+-    cpu->vcpu_dirty = true;
+-}
+-
+-void hvf_cpu_synchronize_pre_loadvm(CPUState *cpu)
+-{
+-    run_on_cpu(cpu, do_hvf_cpu_synchronize_pre_loadvm, RUN_ON_CPU_NULL);
+-}
+-
+ static bool ept_emulation_fault(hvf_slot *slot, uint64_t gpa, uint64_t ept_qual)
+ {
+     int read, write;
+@@ -370,109 +156,19 @@ static bool ept_emulation_fault(hvf_slot *slot, uint64_t gpa, uint64_t ept_qual)
+     return false;
+ }
+ 
+-static void hvf_set_dirty_tracking(MemoryRegionSection *section, bool on)
+-{
+-    hvf_slot *slot;
+-
+-    slot = hvf_find_overlap_slot(
+-            section->offset_within_address_space,
+-            int128_get64(section->size));
+-
+-    /* protect region against writes; begin tracking it */
+-    if (on) {
+-        slot->flags |= HVF_SLOT_LOG;
+-        hv_vm_protect((hv_gpaddr_t)slot->start, (size_t)slot->size,
+-                      HV_MEMORY_READ);
+-    /* stop tracking region*/
+-    } else {
+-        slot->flags &= ~HVF_SLOT_LOG;
+-        hv_vm_protect((hv_gpaddr_t)slot->start, (size_t)slot->size,
+-                      HV_MEMORY_READ | HV_MEMORY_WRITE);
+-    }
+-}
+-
+-static void hvf_log_start(MemoryListener *listener,
+-                          MemoryRegionSection *section, int old, int new)
+-{
+-    if (old != 0) {
+-        return;
+-    }
+-
+-    hvf_set_dirty_tracking(section, 1);
+-}
+-
+-static void hvf_log_stop(MemoryListener *listener,
+-                         MemoryRegionSection *section, int old, int new)
+-{
+-    if (new != 0) {
+-        return;
+-    }
+-
+-    hvf_set_dirty_tracking(section, 0);
+-}
+-
+-static void hvf_log_sync(MemoryListener *listener,
+-                         MemoryRegionSection *section)
+-{
+-    /*
+-     * sync of dirty pages is handled elsewhere; just make sure we keep
+-     * tracking the region.
+-     */
+-    hvf_set_dirty_tracking(section, 1);
+-}
+-
+-static void hvf_region_add(MemoryListener *listener,
+-                           MemoryRegionSection *section)
+-{
+-    hvf_set_phys_mem(section, true);
+-}
+-
+-static void hvf_region_del(MemoryListener *listener,
+-                           MemoryRegionSection *section)
+-{
+-    hvf_set_phys_mem(section, false);
+-}
+-
+-static MemoryListener hvf_memory_listener = {
+-    .priority = 10,
+-    .region_add = hvf_region_add,
+-    .region_del = hvf_region_del,
+-    .log_start = hvf_log_start,
+-    .log_stop = hvf_log_stop,
+-    .log_sync = hvf_log_sync,
+-};
+-
+-void hvf_vcpu_destroy(CPUState *cpu)
++void hvf_arch_vcpu_destroy(CPUState *cpu)
+ {
+     X86CPU *x86_cpu = X86_CPU(cpu);
+     CPUX86State *env = &x86_cpu->env;
+ 
+-    hv_return_t ret = hv_vcpu_destroy((hv_vcpuid_t)cpu->hvf_fd);
+     g_free(env->hvf_mmio_buf);
+-    assert_hvf_ok(ret);
+-}
+-
+-static void dummy_signal(int sig)
+-{
+ }
+ 
+-int hvf_init_vcpu(CPUState *cpu)
++int hvf_arch_init_vcpu(CPUState *cpu)
+ {
+ 
+     X86CPU *x86cpu = X86_CPU(cpu);
+     CPUX86State *env = &x86cpu->env;
+-    int r;
+-
+-    /* init cpu signals */
+-    sigset_t set;
+-    struct sigaction sigact;
+-
+-    memset(&sigact, 0, sizeof(sigact));
+-    sigact.sa_handler = dummy_signal;
+-    sigaction(SIG_IPI, &sigact, NULL);
+-
+-    pthread_sigmask(SIG_BLOCK, NULL, &set);
+-    sigdelset(&set, SIG_IPI);
+ 
+     init_emu();
+     init_decoder();
+@@ -480,10 +176,6 @@ int hvf_init_vcpu(CPUState *cpu)
+     hvf_state->hvf_caps = g_new0(struct hvf_vcpu_caps, 1);
+     env->hvf_mmio_buf = g_new(char, 4096);
+ 
+-    r = hv_vcpu_create((hv_vcpuid_t *)&cpu->hvf_fd, HV_VCPU_DEFAULT);
+-    cpu->vcpu_dirty = 1;
+-    assert_hvf_ok(r);
+-
+     if (hv_vmx_read_capability(HV_VMX_CAP_PINBASED,
+         &hvf_state->hvf_caps->vmx_cap_pinbased)) {
+         abort();
+@@ -865,49 +557,3 @@ int hvf_vcpu_exec(CPUState *cpu)
+ 
+     return ret;
+ }
+-
+-bool hvf_allowed;
+-
+-static int hvf_accel_init(MachineState *ms)
+-{
+-    int x;
+-    hv_return_t ret;
+-    HVFState *s;
+-
+-    ret = hv_vm_create(HV_VM_DEFAULT);
+-    assert_hvf_ok(ret);
+-
+-    s = g_new0(HVFState, 1);
+- 
+-    s->num_slots = 32;
+-    for (x = 0; x < s->num_slots; ++x) {
+-        s->slots[x].size = 0;
+-        s->slots[x].slot_id = x;
+-    }
+-  
+-    hvf_state = s;
+-    memory_listener_register(&hvf_memory_listener, &address_space_memory);
+-    cpus_register_accel(&hvf_cpus);
+-    return 0;
+-}
+-
+-static void hvf_accel_class_init(ObjectClass *oc, void *data)
+-{
+-    AccelClass *ac = ACCEL_CLASS(oc);
+-    ac->name = "HVF";
+-    ac->init_machine = hvf_accel_init;
+-    ac->allowed = &hvf_allowed;
+-}
+-
+-static const TypeInfo hvf_accel_type = {
+-    .name = TYPE_HVF_ACCEL,
+-    .parent = TYPE_ACCEL,
+-    .class_init = hvf_accel_class_init,
+-};
+-
+-static void hvf_type_init(void)
+-{
+-    type_register_static(&hvf_accel_type);
+-}
+-
+-type_init(hvf_type_init);
+diff --git a/target/i386/hvf/meson.build b/target/i386/hvf/meson.build
+index 409c9a3f144..c8a43717eee 100644
+--- a/target/i386/hvf/meson.build
++++ b/target/i386/hvf/meson.build
+@@ -1,6 +1,5 @@
+ i386_softmmu_ss.add(when: [hvf, 'CONFIG_HVF'], if_true: files(
+   'hvf.c',
+-  'hvf-cpus.c',
+   'x86.c',
+   'x86_cpuid.c',
+   'x86_decode.c',
+diff --git a/target/i386/hvf/x86hvf.c b/target/i386/hvf/x86hvf.c
+index bbec412b6c8..89b8e9d87af 100644
+--- a/target/i386/hvf/x86hvf.c
++++ b/target/i386/hvf/x86hvf.c
+@@ -20,6 +20,9 @@
+ #include "qemu/osdep.h"
+ 
+ #include "qemu-common.h"
++#include "sysemu/hvf.h"
++#include "sysemu/hvf_int.h"
++#include "sysemu/hw_accel.h"
+ #include "x86hvf.h"
+ #include "vmx.h"
+ #include "vmcs.h"
+@@ -32,8 +35,6 @@
+ #include <Hypervisor/hv.h>
+ #include <Hypervisor/hv_vmx.h>
+ 
+-#include "hvf-cpus.h"
+-
+ void hvf_set_segment(struct CPUState *cpu, struct vmx_segment *vmx_seg,
+                      SegmentCache *qseg, bool is_tr)
+ {
+@@ -437,7 +438,7 @@ int hvf_process_events(CPUState *cpu_state)
+     env->eflags = rreg(cpu_state->hvf_fd, HV_X86_RFLAGS);
+ 
+     if (cpu_state->interrupt_request & CPU_INTERRUPT_INIT) {
+-        hvf_cpu_synchronize_state(cpu_state);
++        cpu_synchronize_state(cpu_state);
+         do_cpu_init(cpu);
+     }
+ 
+@@ -451,12 +452,12 @@ int hvf_process_events(CPUState *cpu_state)
+         cpu_state->halted = 0;
+     }
+     if (cpu_state->interrupt_request & CPU_INTERRUPT_SIPI) {
+-        hvf_cpu_synchronize_state(cpu_state);
++        cpu_synchronize_state(cpu_state);
+         do_cpu_sipi(cpu);
+     }
+     if (cpu_state->interrupt_request & CPU_INTERRUPT_TPR) {
+         cpu_state->interrupt_request &= ~CPU_INTERRUPT_TPR;
+-        hvf_cpu_synchronize_state(cpu_state);
++        cpu_synchronize_state(cpu_state);
+         apic_handle_tpr_access_report(cpu->apic_state, env->eip,
+                                       env->tpr_access_type);
+     }
+diff --git a/target/i386/hvf/x86hvf.h b/target/i386/hvf/x86hvf.h
+index 635ab0f34e4..99ed8d608dd 100644
+--- a/target/i386/hvf/x86hvf.h
++++ b/target/i386/hvf/x86hvf.h
+@@ -21,8 +21,6 @@
+ #include "x86_descr.h"
+ 
+ int hvf_process_events(CPUState *);
+-int hvf_put_registers(CPUState *);
+-int hvf_get_registers(CPUState *);
+ bool hvf_inject_interrupts(CPUState *);
+ void hvf_set_segment(struct CPUState *cpu, struct vmx_segment *vmx_seg,
+                      SegmentCache *qseg, bool is_tr);
+
+From eeaa52e392f937e0f928033f28ae7dccc24b8c13 Mon Sep 17 00:00:00 2001
+From: Alexander Graf <agraf@csgraf.de>
+Date: Wed, 20 Jan 2021 23:44:37 +0100
+Subject: [PATCH 04/11] hvf: Introduce hvf vcpu struct
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+We will need more than a single field for hvf going forward. To keep
+the global vcpu struct uncluttered, let's allocate a special hvf vcpu
+struct, similar to how hax does it.
+
+Signed-off-by: Alexander Graf <agraf@csgraf.de>
+Reviewed-by: Roman Bolshakov <r.bolshakov@yadro.com>
+Tested-by: Roman Bolshakov <r.bolshakov@yadro.com>
+Reviewed-by: Alex Bennée <alex.bennee@linaro.org>
+
+Message-Id: <20210120224444.71840-5-agraf@csgraf.de>
+---
+ accel/hvf/hvf-cpus.c        |   8 +-
+ include/hw/core/cpu.h       |   3 +-
+ include/sysemu/hvf_int.h    |   4 +
+ target/i386/hvf/hvf.c       | 102 +++++++++---------
+ target/i386/hvf/vmx.h       |  24 +++--
+ target/i386/hvf/x86.c       |  28 ++---
+ target/i386/hvf/x86_descr.c |  26 ++---
+ target/i386/hvf/x86_emu.c   |  62 +++++------
+ target/i386/hvf/x86_mmu.c   |   4 +-
+ target/i386/hvf/x86_task.c  |  12 +--
+ target/i386/hvf/x86hvf.c    | 210 ++++++++++++++++++------------------
+ 11 files changed, 247 insertions(+), 236 deletions(-)
+
+diff --git a/accel/hvf/hvf-cpus.c b/accel/hvf/hvf-cpus.c
+index 60f6d76bf3e..2c6796604a1 100644
+--- a/accel/hvf/hvf-cpus.c
++++ b/accel/hvf/hvf-cpus.c
+@@ -312,10 +312,12 @@ static void hvf_cpu_synchronize_pre_loadvm(CPUState *cpu)
+ 
+ static void hvf_vcpu_destroy(CPUState *cpu)
+ {
+-    hv_return_t ret = hv_vcpu_destroy(cpu->hvf_fd);
++    hv_return_t ret = hv_vcpu_destroy(cpu->hvf->fd);
+     assert_hvf_ok(ret);
+ 
+     hvf_arch_vcpu_destroy(cpu);
++    g_free(cpu->hvf);
++    cpu->hvf = NULL;
+ }
+ 
+ static void dummy_signal(int sig)
+@@ -326,6 +328,8 @@ static int hvf_init_vcpu(CPUState *cpu)
+ {
+     int r;
+ 
++    cpu->hvf = g_malloc0(sizeof(*cpu->hvf));
++
+     /* init cpu signals */
+     sigset_t set;
+     struct sigaction sigact;
+@@ -337,7 +341,7 @@ static int hvf_init_vcpu(CPUState *cpu)
+     pthread_sigmask(SIG_BLOCK, NULL, &set);
+     sigdelset(&set, SIG_IPI);
+ 
+-    r = hv_vcpu_create((hv_vcpuid_t *)&cpu->hvf_fd, HV_VCPU_DEFAULT);
++    r = hv_vcpu_create((hv_vcpuid_t *)&cpu->hvf->fd, HV_VCPU_DEFAULT);
+     cpu->vcpu_dirty = 1;
+     assert_hvf_ok(r);
+ 
+diff --git a/include/hw/core/cpu.h b/include/hw/core/cpu.h
+index 140fa32a5e3..9e1b61f63d5 100644
+--- a/include/hw/core/cpu.h
++++ b/include/hw/core/cpu.h
+@@ -281,6 +281,7 @@ struct KVMState;
+ struct kvm_run;
+ 
+ struct hax_vcpu_state;
++struct hvf_vcpu_state;
+ 
+ #define TB_JMP_CACHE_BITS 12
+ #define TB_JMP_CACHE_SIZE (1 << TB_JMP_CACHE_BITS)
+@@ -464,7 +465,7 @@ struct CPUState {
+ 
+     struct hax_vcpu_state *hax_vcpu;
+ 
+-    int hvf_fd;
++    struct hvf_vcpu_state *hvf;
+ 
+     /* track IOMMUs whose translations we've cached in the TCG TLB */
+     GArray *iommu_notifiers;
+diff --git a/include/sysemu/hvf_int.h b/include/sysemu/hvf_int.h
+index 69de46db7d2..9d3cb53e474 100644
+--- a/include/sysemu/hvf_int.h
++++ b/include/sysemu/hvf_int.h
+@@ -43,6 +43,10 @@ struct HVFState {
+ };
+ extern HVFState *hvf_state;
+ 
++struct hvf_vcpu_state {
++    int fd;
++};
++
+ void assert_hvf_ok(hv_return_t ret);
+ int hvf_get_registers(CPUState *cpu);
+ int hvf_put_registers(CPUState *cpu);
+diff --git a/target/i386/hvf/hvf.c b/target/i386/hvf/hvf.c
+index 8b96ecd6190..08b4adecd96 100644
+--- a/target/i386/hvf/hvf.c
++++ b/target/i386/hvf/hvf.c
+@@ -80,11 +80,11 @@ void vmx_update_tpr(CPUState *cpu)
+     int tpr = cpu_get_apic_tpr(x86_cpu->apic_state) << 4;
+     int irr = apic_get_highest_priority_irr(x86_cpu->apic_state);
+ 
+-    wreg(cpu->hvf_fd, HV_X86_TPR, tpr);
++    wreg(cpu->hvf->fd, HV_X86_TPR, tpr);
+     if (irr == -1) {
+-        wvmcs(cpu->hvf_fd, VMCS_TPR_THRESHOLD, 0);
++        wvmcs(cpu->hvf->fd, VMCS_TPR_THRESHOLD, 0);
+     } else {
+-        wvmcs(cpu->hvf_fd, VMCS_TPR_THRESHOLD, (irr > tpr) ? tpr >> 4 :
++        wvmcs(cpu->hvf->fd, VMCS_TPR_THRESHOLD, (irr > tpr) ? tpr >> 4 :
+               irr >> 4);
+     }
+ }
+@@ -92,7 +92,7 @@ void vmx_update_tpr(CPUState *cpu)
+ static void update_apic_tpr(CPUState *cpu)
+ {
+     X86CPU *x86_cpu = X86_CPU(cpu);
+-    int tpr = rreg(cpu->hvf_fd, HV_X86_TPR) >> 4;
++    int tpr = rreg(cpu->hvf->fd, HV_X86_TPR) >> 4;
+     cpu_set_apic_tpr(x86_cpu->apic_state, tpr);
+ }
+ 
+@@ -194,43 +194,43 @@ int hvf_arch_init_vcpu(CPUState *cpu)
+     }
+ 
+     /* set VMCS control fields */
+-    wvmcs(cpu->hvf_fd, VMCS_PIN_BASED_CTLS,
++    wvmcs(cpu->hvf->fd, VMCS_PIN_BASED_CTLS,
+           cap2ctrl(hvf_state->hvf_caps->vmx_cap_pinbased,
+           VMCS_PIN_BASED_CTLS_EXTINT |
+           VMCS_PIN_BASED_CTLS_NMI |
+           VMCS_PIN_BASED_CTLS_VNMI));
+-    wvmcs(cpu->hvf_fd, VMCS_PRI_PROC_BASED_CTLS,
++    wvmcs(cpu->hvf->fd, VMCS_PRI_PROC_BASED_CTLS,
+           cap2ctrl(hvf_state->hvf_caps->vmx_cap_procbased,
+           VMCS_PRI_PROC_BASED_CTLS_HLT |
+           VMCS_PRI_PROC_BASED_CTLS_MWAIT |
+           VMCS_PRI_PROC_BASED_CTLS_TSC_OFFSET |
+           VMCS_PRI_PROC_BASED_CTLS_TPR_SHADOW) |
+           VMCS_PRI_PROC_BASED_CTLS_SEC_CONTROL);
+-    wvmcs(cpu->hvf_fd, VMCS_SEC_PROC_BASED_CTLS,
++    wvmcs(cpu->hvf->fd, VMCS_SEC_PROC_BASED_CTLS,
+           cap2ctrl(hvf_state->hvf_caps->vmx_cap_procbased2,
+                    VMCS_PRI_PROC_BASED2_CTLS_APIC_ACCESSES));
+ 
+-    wvmcs(cpu->hvf_fd, VMCS_ENTRY_CTLS, cap2ctrl(hvf_state->hvf_caps->vmx_cap_entry,
++    wvmcs(cpu->hvf->fd, VMCS_ENTRY_CTLS, cap2ctrl(hvf_state->hvf_caps->vmx_cap_entry,
+           0));
+-    wvmcs(cpu->hvf_fd, VMCS_EXCEPTION_BITMAP, 0); /* Double fault */
++    wvmcs(cpu->hvf->fd, VMCS_EXCEPTION_BITMAP, 0); /* Double fault */
+ 
+-    wvmcs(cpu->hvf_fd, VMCS_TPR_THRESHOLD, 0);
++    wvmcs(cpu->hvf->fd, VMCS_TPR_THRESHOLD, 0);
+ 
+     x86cpu = X86_CPU(cpu);
+     x86cpu->env.xsave_buf = qemu_memalign(4096, 4096);
+ 
+-    hv_vcpu_enable_native_msr(cpu->hvf_fd, MSR_STAR, 1);
+-    hv_vcpu_enable_native_msr(cpu->hvf_fd, MSR_LSTAR, 1);
+-    hv_vcpu_enable_native_msr(cpu->hvf_fd, MSR_CSTAR, 1);
+-    hv_vcpu_enable_native_msr(cpu->hvf_fd, MSR_FMASK, 1);
+-    hv_vcpu_enable_native_msr(cpu->hvf_fd, MSR_FSBASE, 1);
+-    hv_vcpu_enable_native_msr(cpu->hvf_fd, MSR_GSBASE, 1);
+-    hv_vcpu_enable_native_msr(cpu->hvf_fd, MSR_KERNELGSBASE, 1);
+-    hv_vcpu_enable_native_msr(cpu->hvf_fd, MSR_TSC_AUX, 1);
+-    hv_vcpu_enable_native_msr(cpu->hvf_fd, MSR_IA32_TSC, 1);
+-    hv_vcpu_enable_native_msr(cpu->hvf_fd, MSR_IA32_SYSENTER_CS, 1);
+-    hv_vcpu_enable_native_msr(cpu->hvf_fd, MSR_IA32_SYSENTER_EIP, 1);
+-    hv_vcpu_enable_native_msr(cpu->hvf_fd, MSR_IA32_SYSENTER_ESP, 1);
++    hv_vcpu_enable_native_msr(cpu->hvf->fd, MSR_STAR, 1);
++    hv_vcpu_enable_native_msr(cpu->hvf->fd, MSR_LSTAR, 1);
++    hv_vcpu_enable_native_msr(cpu->hvf->fd, MSR_CSTAR, 1);
++    hv_vcpu_enable_native_msr(cpu->hvf->fd, MSR_FMASK, 1);
++    hv_vcpu_enable_native_msr(cpu->hvf->fd, MSR_FSBASE, 1);
++    hv_vcpu_enable_native_msr(cpu->hvf->fd, MSR_GSBASE, 1);
++    hv_vcpu_enable_native_msr(cpu->hvf->fd, MSR_KERNELGSBASE, 1);
++    hv_vcpu_enable_native_msr(cpu->hvf->fd, MSR_TSC_AUX, 1);
++    hv_vcpu_enable_native_msr(cpu->hvf->fd, MSR_IA32_TSC, 1);
++    hv_vcpu_enable_native_msr(cpu->hvf->fd, MSR_IA32_SYSENTER_CS, 1);
++    hv_vcpu_enable_native_msr(cpu->hvf->fd, MSR_IA32_SYSENTER_EIP, 1);
++    hv_vcpu_enable_native_msr(cpu->hvf->fd, MSR_IA32_SYSENTER_ESP, 1);
+ 
+     return 0;
+ }
+@@ -271,16 +271,16 @@ static void hvf_store_events(CPUState *cpu, uint32_t ins_len, uint64_t idtvec_in
+         }
+         if (idtvec_info & VMCS_IDT_VEC_ERRCODE_VALID) {
+             env->has_error_code = true;
+-            env->error_code = rvmcs(cpu->hvf_fd, VMCS_IDT_VECTORING_ERROR);
++            env->error_code = rvmcs(cpu->hvf->fd, VMCS_IDT_VECTORING_ERROR);
+         }
+     }
+-    if ((rvmcs(cpu->hvf_fd, VMCS_GUEST_INTERRUPTIBILITY) &
++    if ((rvmcs(cpu->hvf->fd, VMCS_GUEST_INTERRUPTIBILITY) &
+         VMCS_INTERRUPTIBILITY_NMI_BLOCKING)) {
+         env->hflags2 |= HF2_NMI_MASK;
+     } else {
+         env->hflags2 &= ~HF2_NMI_MASK;
+     }
+-    if (rvmcs(cpu->hvf_fd, VMCS_GUEST_INTERRUPTIBILITY) &
++    if (rvmcs(cpu->hvf->fd, VMCS_GUEST_INTERRUPTIBILITY) &
+          (VMCS_INTERRUPTIBILITY_STI_BLOCKING |
+          VMCS_INTERRUPTIBILITY_MOVSS_BLOCKING)) {
+         env->hflags |= HF_INHIBIT_IRQ_MASK;
+@@ -317,20 +317,20 @@ int hvf_vcpu_exec(CPUState *cpu)
+             return EXCP_HLT;
+         }
+ 
+-        hv_return_t r  = hv_vcpu_run(cpu->hvf_fd);
++        hv_return_t r  = hv_vcpu_run(cpu->hvf->fd);
+         assert_hvf_ok(r);
+ 
+         /* handle VMEXIT */
+-        uint64_t exit_reason = rvmcs(cpu->hvf_fd, VMCS_EXIT_REASON);
+-        uint64_t exit_qual = rvmcs(cpu->hvf_fd, VMCS_EXIT_QUALIFICATION);
+-        uint32_t ins_len = (uint32_t)rvmcs(cpu->hvf_fd,
++        uint64_t exit_reason = rvmcs(cpu->hvf->fd, VMCS_EXIT_REASON);
++        uint64_t exit_qual = rvmcs(cpu->hvf->fd, VMCS_EXIT_QUALIFICATION);
++        uint32_t ins_len = (uint32_t)rvmcs(cpu->hvf->fd,
+                                            VMCS_EXIT_INSTRUCTION_LENGTH);
+ 
+-        uint64_t idtvec_info = rvmcs(cpu->hvf_fd, VMCS_IDT_VECTORING_INFO);
++        uint64_t idtvec_info = rvmcs(cpu->hvf->fd, VMCS_IDT_VECTORING_INFO);
+ 
+         hvf_store_events(cpu, ins_len, idtvec_info);
+-        rip = rreg(cpu->hvf_fd, HV_X86_RIP);
+-        env->eflags = rreg(cpu->hvf_fd, HV_X86_RFLAGS);
++        rip = rreg(cpu->hvf->fd, HV_X86_RIP);
++        env->eflags = rreg(cpu->hvf->fd, HV_X86_RFLAGS);
+ 
+         qemu_mutex_lock_iothread();
+ 
+@@ -360,7 +360,7 @@ int hvf_vcpu_exec(CPUState *cpu)
+         case EXIT_REASON_EPT_FAULT:
+         {
+             hvf_slot *slot;
+-            uint64_t gpa = rvmcs(cpu->hvf_fd, VMCS_GUEST_PHYSICAL_ADDRESS);
++            uint64_t gpa = rvmcs(cpu->hvf->fd, VMCS_GUEST_PHYSICAL_ADDRESS);
+ 
+             if (((idtvec_info & VMCS_IDT_VEC_VALID) == 0) &&
+                 ((exit_qual & EXIT_QUAL_NMIUDTI) != 0)) {
+@@ -405,7 +405,7 @@ int hvf_vcpu_exec(CPUState *cpu)
+                 store_regs(cpu);
+                 break;
+             } else if (!string && !in) {
+-                RAX(env) = rreg(cpu->hvf_fd, HV_X86_RAX);
++                RAX(env) = rreg(cpu->hvf->fd, HV_X86_RAX);
+                 hvf_handle_io(env, port, &RAX(env), 1, size, 1);
+                 macvm_set_rip(cpu, rip + ins_len);
+                 break;
+@@ -421,17 +421,17 @@ int hvf_vcpu_exec(CPUState *cpu)
+             break;
+         }
+         case EXIT_REASON_CPUID: {
+-            uint32_t rax = (uint32_t)rreg(cpu->hvf_fd, HV_X86_RAX);
+-            uint32_t rbx = (uint32_t)rreg(cpu->hvf_fd, HV_X86_RBX);
+-            uint32_t rcx = (uint32_t)rreg(cpu->hvf_fd, HV_X86_RCX);
+-            uint32_t rdx = (uint32_t)rreg(cpu->hvf_fd, HV_X86_RDX);
++            uint32_t rax = (uint32_t)rreg(cpu->hvf->fd, HV_X86_RAX);
++            uint32_t rbx = (uint32_t)rreg(cpu->hvf->fd, HV_X86_RBX);
++            uint32_t rcx = (uint32_t)rreg(cpu->hvf->fd, HV_X86_RCX);
++            uint32_t rdx = (uint32_t)rreg(cpu->hvf->fd, HV_X86_RDX);
+ 
+             cpu_x86_cpuid(env, rax, rcx, &rax, &rbx, &rcx, &rdx);
+ 
+-            wreg(cpu->hvf_fd, HV_X86_RAX, rax);
+-            wreg(cpu->hvf_fd, HV_X86_RBX, rbx);
+-            wreg(cpu->hvf_fd, HV_X86_RCX, rcx);
+-            wreg(cpu->hvf_fd, HV_X86_RDX, rdx);
++            wreg(cpu->hvf->fd, HV_X86_RAX, rax);
++            wreg(cpu->hvf->fd, HV_X86_RBX, rbx);
++            wreg(cpu->hvf->fd, HV_X86_RCX, rcx);
++            wreg(cpu->hvf->fd, HV_X86_RDX, rdx);
+ 
+             macvm_set_rip(cpu, rip + ins_len);
+             break;
+@@ -439,16 +439,16 @@ int hvf_vcpu_exec(CPUState *cpu)
+         case EXIT_REASON_XSETBV: {
+             X86CPU *x86_cpu = X86_CPU(cpu);
+             CPUX86State *env = &x86_cpu->env;
+-            uint32_t eax = (uint32_t)rreg(cpu->hvf_fd, HV_X86_RAX);
+-            uint32_t ecx = (uint32_t)rreg(cpu->hvf_fd, HV_X86_RCX);
+-            uint32_t edx = (uint32_t)rreg(cpu->hvf_fd, HV_X86_RDX);
++            uint32_t eax = (uint32_t)rreg(cpu->hvf->fd, HV_X86_RAX);
++            uint32_t ecx = (uint32_t)rreg(cpu->hvf->fd, HV_X86_RCX);
++            uint32_t edx = (uint32_t)rreg(cpu->hvf->fd, HV_X86_RDX);
+ 
+             if (ecx) {
+                 macvm_set_rip(cpu, rip + ins_len);
+                 break;
+             }
+             env->xcr0 = ((uint64_t)edx << 32) | eax;
+-            wreg(cpu->hvf_fd, HV_X86_XCR0, env->xcr0 | 1);
++            wreg(cpu->hvf->fd, HV_X86_XCR0, env->xcr0 | 1);
+             macvm_set_rip(cpu, rip + ins_len);
+             break;
+         }
+@@ -487,11 +487,11 @@ int hvf_vcpu_exec(CPUState *cpu)
+ 
+             switch (cr) {
+             case 0x0: {
+-                macvm_set_cr0(cpu->hvf_fd, RRX(env, reg));
++                macvm_set_cr0(cpu->hvf->fd, RRX(env, reg));
+                 break;
+             }
+             case 4: {
+-                macvm_set_cr4(cpu->hvf_fd, RRX(env, reg));
++                macvm_set_cr4(cpu->hvf->fd, RRX(env, reg));
+                 break;
+             }
+             case 8: {
+@@ -527,7 +527,7 @@ int hvf_vcpu_exec(CPUState *cpu)
+             break;
+         }
+         case EXIT_REASON_TASK_SWITCH: {
+-            uint64_t vinfo = rvmcs(cpu->hvf_fd, VMCS_IDT_VECTORING_INFO);
++            uint64_t vinfo = rvmcs(cpu->hvf->fd, VMCS_IDT_VECTORING_INFO);
+             x68_segment_selector sel = {.sel = exit_qual & 0xffff};
+             vmx_handle_task_switch(cpu, sel, (exit_qual >> 30) & 0x3,
+              vinfo & VMCS_INTR_VALID, vinfo & VECTORING_INFO_VECTOR_MASK, vinfo
+@@ -540,8 +540,8 @@ int hvf_vcpu_exec(CPUState *cpu)
+             break;
+         }
+         case EXIT_REASON_RDPMC:
+-            wreg(cpu->hvf_fd, HV_X86_RAX, 0);
+-            wreg(cpu->hvf_fd, HV_X86_RDX, 0);
++            wreg(cpu->hvf->fd, HV_X86_RAX, 0);
++            wreg(cpu->hvf->fd, HV_X86_RDX, 0);
+             macvm_set_rip(cpu, rip + ins_len);
+             break;
+         case VMX_REASON_VMCALL:
+diff --git a/target/i386/hvf/vmx.h b/target/i386/hvf/vmx.h
+index 24c4cdf0be0..6df87116f62 100644
+--- a/target/i386/hvf/vmx.h
++++ b/target/i386/hvf/vmx.h
+@@ -30,6 +30,8 @@
+ #include "vmcs.h"
+ #include "cpu.h"
+ #include "x86.h"
++#include "sysemu/hvf.h"
++#include "sysemu/hvf_int.h"
+ 
+ #include "exec/address-spaces.h"
+ 
+@@ -179,15 +181,15 @@ static inline void macvm_set_rip(CPUState *cpu, uint64_t rip)
+     uint64_t val;
+ 
+     /* BUG, should take considering overlap.. */
+-    wreg(cpu->hvf_fd, HV_X86_RIP, rip);
++    wreg(cpu->hvf->fd, HV_X86_RIP, rip);
+     env->eip = rip;
+ 
+     /* after moving forward in rip, we need to clean INTERRUPTABILITY */
+-   val = rvmcs(cpu->hvf_fd, VMCS_GUEST_INTERRUPTIBILITY);
++   val = rvmcs(cpu->hvf->fd, VMCS_GUEST_INTERRUPTIBILITY);
+    if (val & (VMCS_INTERRUPTIBILITY_STI_BLOCKING |
+                VMCS_INTERRUPTIBILITY_MOVSS_BLOCKING)) {
+         env->hflags &= ~HF_INHIBIT_IRQ_MASK;
+-        wvmcs(cpu->hvf_fd, VMCS_GUEST_INTERRUPTIBILITY,
++        wvmcs(cpu->hvf->fd, VMCS_GUEST_INTERRUPTIBILITY,
+                val & ~(VMCS_INTERRUPTIBILITY_STI_BLOCKING |
+                VMCS_INTERRUPTIBILITY_MOVSS_BLOCKING));
+    }
+@@ -199,9 +201,9 @@ static inline void vmx_clear_nmi_blocking(CPUState *cpu)
+     CPUX86State *env = &x86_cpu->env;
+ 
+     env->hflags2 &= ~HF2_NMI_MASK;
+-    uint32_t gi = (uint32_t) rvmcs(cpu->hvf_fd, VMCS_GUEST_INTERRUPTIBILITY);
++    uint32_t gi = (uint32_t) rvmcs(cpu->hvf->fd, VMCS_GUEST_INTERRUPTIBILITY);
+     gi &= ~VMCS_INTERRUPTIBILITY_NMI_BLOCKING;
+-    wvmcs(cpu->hvf_fd, VMCS_GUEST_INTERRUPTIBILITY, gi);
++    wvmcs(cpu->hvf->fd, VMCS_GUEST_INTERRUPTIBILITY, gi);
+ }
+ 
+ static inline void vmx_set_nmi_blocking(CPUState *cpu)
+@@ -210,16 +212,16 @@ static inline void vmx_set_nmi_blocking(CPUState *cpu)
+     CPUX86State *env = &x86_cpu->env;
+ 
+     env->hflags2 |= HF2_NMI_MASK;
+-    uint32_t gi = (uint32_t)rvmcs(cpu->hvf_fd, VMCS_GUEST_INTERRUPTIBILITY);
++    uint32_t gi = (uint32_t)rvmcs(cpu->hvf->fd, VMCS_GUEST_INTERRUPTIBILITY);
+     gi |= VMCS_INTERRUPTIBILITY_NMI_BLOCKING;
+-    wvmcs(cpu->hvf_fd, VMCS_GUEST_INTERRUPTIBILITY, gi);
++    wvmcs(cpu->hvf->fd, VMCS_GUEST_INTERRUPTIBILITY, gi);
+ }
+ 
+ static inline void vmx_set_nmi_window_exiting(CPUState *cpu)
+ {
+     uint64_t val;
+-    val = rvmcs(cpu->hvf_fd, VMCS_PRI_PROC_BASED_CTLS);
+-    wvmcs(cpu->hvf_fd, VMCS_PRI_PROC_BASED_CTLS, val |
++    val = rvmcs(cpu->hvf->fd, VMCS_PRI_PROC_BASED_CTLS);
++    wvmcs(cpu->hvf->fd, VMCS_PRI_PROC_BASED_CTLS, val |
+           VMCS_PRI_PROC_BASED_CTLS_NMI_WINDOW_EXITING);
+ 
+ }
+@@ -228,8 +230,8 @@ static inline void vmx_clear_nmi_window_exiting(CPUState *cpu)
+ {
+ 
+     uint64_t val;
+-    val = rvmcs(cpu->hvf_fd, VMCS_PRI_PROC_BASED_CTLS);
+-    wvmcs(cpu->hvf_fd, VMCS_PRI_PROC_BASED_CTLS, val &
++    val = rvmcs(cpu->hvf->fd, VMCS_PRI_PROC_BASED_CTLS);
++    wvmcs(cpu->hvf->fd, VMCS_PRI_PROC_BASED_CTLS, val &
+           ~VMCS_PRI_PROC_BASED_CTLS_NMI_WINDOW_EXITING);
+ }
+ 
+diff --git a/target/i386/hvf/x86.c b/target/i386/hvf/x86.c
+index cd045183a81..2898bb70a84 100644
+--- a/target/i386/hvf/x86.c
++++ b/target/i386/hvf/x86.c
+@@ -62,11 +62,11 @@ bool x86_read_segment_descriptor(struct CPUState *cpu,
+     }
+ 
+     if (GDT_SEL == sel.ti) {
+-        base  = rvmcs(cpu->hvf_fd, VMCS_GUEST_GDTR_BASE);
+-        limit = rvmcs(cpu->hvf_fd, VMCS_GUEST_GDTR_LIMIT);
++        base  = rvmcs(cpu->hvf->fd, VMCS_GUEST_GDTR_BASE);
++        limit = rvmcs(cpu->hvf->fd, VMCS_GUEST_GDTR_LIMIT);
+     } else {
+-        base  = rvmcs(cpu->hvf_fd, VMCS_GUEST_LDTR_BASE);
+-        limit = rvmcs(cpu->hvf_fd, VMCS_GUEST_LDTR_LIMIT);
++        base  = rvmcs(cpu->hvf->fd, VMCS_GUEST_LDTR_BASE);
++        limit = rvmcs(cpu->hvf->fd, VMCS_GUEST_LDTR_LIMIT);
+     }
+ 
+     if (sel.index * 8 >= limit) {
+@@ -85,11 +85,11 @@ bool x86_write_segment_descriptor(struct CPUState *cpu,
+     uint32_t limit;
+     
+     if (GDT_SEL == sel.ti) {
+-        base  = rvmcs(cpu->hvf_fd, VMCS_GUEST_GDTR_BASE);
+-        limit = rvmcs(cpu->hvf_fd, VMCS_GUEST_GDTR_LIMIT);
++        base  = rvmcs(cpu->hvf->fd, VMCS_GUEST_GDTR_BASE);
++        limit = rvmcs(cpu->hvf->fd, VMCS_GUEST_GDTR_LIMIT);
+     } else {
+-        base  = rvmcs(cpu->hvf_fd, VMCS_GUEST_LDTR_BASE);
+-        limit = rvmcs(cpu->hvf_fd, VMCS_GUEST_LDTR_LIMIT);
++        base  = rvmcs(cpu->hvf->fd, VMCS_GUEST_LDTR_BASE);
++        limit = rvmcs(cpu->hvf->fd, VMCS_GUEST_LDTR_LIMIT);
+     }
+     
+     if (sel.index * 8 >= limit) {
+@@ -103,8 +103,8 @@ bool x86_write_segment_descriptor(struct CPUState *cpu,
+ bool x86_read_call_gate(struct CPUState *cpu, struct x86_call_gate *idt_desc,
+                         int gate)
+ {
+-    target_ulong base  = rvmcs(cpu->hvf_fd, VMCS_GUEST_IDTR_BASE);
+-    uint32_t limit = rvmcs(cpu->hvf_fd, VMCS_GUEST_IDTR_LIMIT);
++    target_ulong base  = rvmcs(cpu->hvf->fd, VMCS_GUEST_IDTR_BASE);
++    uint32_t limit = rvmcs(cpu->hvf->fd, VMCS_GUEST_IDTR_LIMIT);
+ 
+     memset(idt_desc, 0, sizeof(*idt_desc));
+     if (gate * 8 >= limit) {
+@@ -118,7 +118,7 @@ bool x86_read_call_gate(struct CPUState *cpu, struct x86_call_gate *idt_desc,
+ 
+ bool x86_is_protected(struct CPUState *cpu)
+ {
+-    uint64_t cr0 = rvmcs(cpu->hvf_fd, VMCS_GUEST_CR0);
++    uint64_t cr0 = rvmcs(cpu->hvf->fd, VMCS_GUEST_CR0);
+     return cr0 & CR0_PE;
+ }
+ 
+@@ -136,7 +136,7 @@ bool x86_is_v8086(struct CPUState *cpu)
+ 
+ bool x86_is_long_mode(struct CPUState *cpu)
+ {
+-    return rvmcs(cpu->hvf_fd, VMCS_GUEST_IA32_EFER) & MSR_EFER_LMA;
++    return rvmcs(cpu->hvf->fd, VMCS_GUEST_IA32_EFER) & MSR_EFER_LMA;
+ }
+ 
+ bool x86_is_long64_mode(struct CPUState *cpu)
+@@ -149,13 +149,13 @@ bool x86_is_long64_mode(struct CPUState *cpu)
+ 
+ bool x86_is_paging_mode(struct CPUState *cpu)
+ {
+-    uint64_t cr0 = rvmcs(cpu->hvf_fd, VMCS_GUEST_CR0);
++    uint64_t cr0 = rvmcs(cpu->hvf->fd, VMCS_GUEST_CR0);
+     return cr0 & CR0_PG;
+ }
+ 
+ bool x86_is_pae_enabled(struct CPUState *cpu)
+ {
+-    uint64_t cr4 = rvmcs(cpu->hvf_fd, VMCS_GUEST_CR4);
++    uint64_t cr4 = rvmcs(cpu->hvf->fd, VMCS_GUEST_CR4);
+     return cr4 & CR4_PAE;
+ }
+ 
+diff --git a/target/i386/hvf/x86_descr.c b/target/i386/hvf/x86_descr.c
+index 9f539e73f6d..af15c06ac5d 100644
+--- a/target/i386/hvf/x86_descr.c
++++ b/target/i386/hvf/x86_descr.c
+@@ -48,47 +48,47 @@ static const struct vmx_segment_field {
+ 
+ uint32_t vmx_read_segment_limit(CPUState *cpu, X86Seg seg)
+ {
+-    return (uint32_t)rvmcs(cpu->hvf_fd, vmx_segment_fields[seg].limit);
++    return (uint32_t)rvmcs(cpu->hvf->fd, vmx_segment_fields[seg].limit);
+ }
+ 
+ uint32_t vmx_read_segment_ar(CPUState *cpu, X86Seg seg)
+ {
+-    return (uint32_t)rvmcs(cpu->hvf_fd, vmx_segment_fields[seg].ar_bytes);
++    return (uint32_t)rvmcs(cpu->hvf->fd, vmx_segment_fields[seg].ar_bytes);
+ }
+ 
+ uint64_t vmx_read_segment_base(CPUState *cpu, X86Seg seg)
+ {
+-    return rvmcs(cpu->hvf_fd, vmx_segment_fields[seg].base);
++    return rvmcs(cpu->hvf->fd, vmx_segment_fields[seg].base);
+ }
+ 
+ x68_segment_selector vmx_read_segment_selector(CPUState *cpu, X86Seg seg)
+ {
+     x68_segment_selector sel;
+-    sel.sel = rvmcs(cpu->hvf_fd, vmx_segment_fields[seg].selector);
++    sel.sel = rvmcs(cpu->hvf->fd, vmx_segment_fields[seg].selector);
+     return sel;
+ }
+ 
+ void vmx_write_segment_selector(struct CPUState *cpu, x68_segment_selector selector, X86Seg seg)
+ {
+-    wvmcs(cpu->hvf_fd, vmx_segment_fields[seg].selector, selector.sel);
++    wvmcs(cpu->hvf->fd, vmx_segment_fields[seg].selector, selector.sel);
+ }
+ 
+ void vmx_read_segment_descriptor(struct CPUState *cpu, struct vmx_segment *desc, X86Seg seg)
+ {
+-    desc->sel = rvmcs(cpu->hvf_fd, vmx_segment_fields[seg].selector);
+-    desc->base = rvmcs(cpu->hvf_fd, vmx_segment_fields[seg].base);
+-    desc->limit = rvmcs(cpu->hvf_fd, vmx_segment_fields[seg].limit);
+-    desc->ar = rvmcs(cpu->hvf_fd, vmx_segment_fields[seg].ar_bytes);
++    desc->sel = rvmcs(cpu->hvf->fd, vmx_segment_fields[seg].selector);
++    desc->base = rvmcs(cpu->hvf->fd, vmx_segment_fields[seg].base);
++    desc->limit = rvmcs(cpu->hvf->fd, vmx_segment_fields[seg].limit);
++    desc->ar = rvmcs(cpu->hvf->fd, vmx_segment_fields[seg].ar_bytes);
+ }
+ 
+ void vmx_write_segment_descriptor(CPUState *cpu, struct vmx_segment *desc, X86Seg seg)
+ {
+     const struct vmx_segment_field *sf = &vmx_segment_fields[seg];
+ 
+-    wvmcs(cpu->hvf_fd, sf->base, desc->base);
+-    wvmcs(cpu->hvf_fd, sf->limit, desc->limit);
+-    wvmcs(cpu->hvf_fd, sf->selector, desc->sel);
+-    wvmcs(cpu->hvf_fd, sf->ar_bytes, desc->ar);
++    wvmcs(cpu->hvf->fd, sf->base, desc->base);
++    wvmcs(cpu->hvf->fd, sf->limit, desc->limit);
++    wvmcs(cpu->hvf->fd, sf->selector, desc->sel);
++    wvmcs(cpu->hvf->fd, sf->ar_bytes, desc->ar);
+ }
+ 
+ void x86_segment_descriptor_to_vmx(struct CPUState *cpu, x68_segment_selector selector, struct x86_segment_descriptor *desc, struct vmx_segment *vmx_desc)
+diff --git a/target/i386/hvf/x86_emu.c b/target/i386/hvf/x86_emu.c
+index da570e352b4..5a512f67686 100644
+--- a/target/i386/hvf/x86_emu.c
++++ b/target/i386/hvf/x86_emu.c
+@@ -673,7 +673,7 @@ void simulate_rdmsr(struct CPUState *cpu)
+ 
+     switch (msr) {
+     case MSR_IA32_TSC:
+-        val = rdtscp() + rvmcs(cpu->hvf_fd, VMCS_TSC_OFFSET);
++        val = rdtscp() + rvmcs(cpu->hvf->fd, VMCS_TSC_OFFSET);
+         break;
+     case MSR_IA32_APICBASE:
+         val = cpu_get_apic_base(X86_CPU(cpu)->apic_state);
+@@ -682,16 +682,16 @@ void simulate_rdmsr(struct CPUState *cpu)
+         val = x86_cpu->ucode_rev;
+         break;
+     case MSR_EFER:
+-        val = rvmcs(cpu->hvf_fd, VMCS_GUEST_IA32_EFER);
++        val = rvmcs(cpu->hvf->fd, VMCS_GUEST_IA32_EFER);
+         break;
+     case MSR_FSBASE:
+-        val = rvmcs(cpu->hvf_fd, VMCS_GUEST_FS_BASE);
++        val = rvmcs(cpu->hvf->fd, VMCS_GUEST_FS_BASE);
+         break;
+     case MSR_GSBASE:
+-        val = rvmcs(cpu->hvf_fd, VMCS_GUEST_GS_BASE);
++        val = rvmcs(cpu->hvf->fd, VMCS_GUEST_GS_BASE);
+         break;
+     case MSR_KERNELGSBASE:
+-        val = rvmcs(cpu->hvf_fd, VMCS_HOST_FS_BASE);
++        val = rvmcs(cpu->hvf->fd, VMCS_HOST_FS_BASE);
+         break;
+     case MSR_STAR:
+         abort();
+@@ -775,13 +775,13 @@ void simulate_wrmsr(struct CPUState *cpu)
+         cpu_set_apic_base(X86_CPU(cpu)->apic_state, data);
+         break;
+     case MSR_FSBASE:
+-        wvmcs(cpu->hvf_fd, VMCS_GUEST_FS_BASE, data);
++        wvmcs(cpu->hvf->fd, VMCS_GUEST_FS_BASE, data);
+         break;
+     case MSR_GSBASE:
+-        wvmcs(cpu->hvf_fd, VMCS_GUEST_GS_BASE, data);
++        wvmcs(cpu->hvf->fd, VMCS_GUEST_GS_BASE, data);
+         break;
+     case MSR_KERNELGSBASE:
+-        wvmcs(cpu->hvf_fd, VMCS_HOST_FS_BASE, data);
++        wvmcs(cpu->hvf->fd, VMCS_HOST_FS_BASE, data);
+         break;
+     case MSR_STAR:
+         abort();
+@@ -794,9 +794,9 @@ void simulate_wrmsr(struct CPUState *cpu)
+         break;
+     case MSR_EFER:
+         /*printf("new efer %llx\n", EFER(cpu));*/
+-        wvmcs(cpu->hvf_fd, VMCS_GUEST_IA32_EFER, data);
++        wvmcs(cpu->hvf->fd, VMCS_GUEST_IA32_EFER, data);
+         if (data & MSR_EFER_NXE) {
+-            hv_vcpu_invalidate_tlb(cpu->hvf_fd);
++            hv_vcpu_invalidate_tlb(cpu->hvf->fd);
+         }
+         break;
+     case MSR_MTRRphysBase(0):
+@@ -1420,21 +1420,21 @@ void load_regs(struct CPUState *cpu)
+     CPUX86State *env = &x86_cpu->env;
+ 
+     int i = 0;
+-    RRX(env, R_EAX) = rreg(cpu->hvf_fd, HV_X86_RAX);
+-    RRX(env, R_EBX) = rreg(cpu->hvf_fd, HV_X86_RBX);
+-    RRX(env, R_ECX) = rreg(cpu->hvf_fd, HV_X86_RCX);
+-    RRX(env, R_EDX) = rreg(cpu->hvf_fd, HV_X86_RDX);
+-    RRX(env, R_ESI) = rreg(cpu->hvf_fd, HV_X86_RSI);
+-    RRX(env, R_EDI) = rreg(cpu->hvf_fd, HV_X86_RDI);
+-    RRX(env, R_ESP) = rreg(cpu->hvf_fd, HV_X86_RSP);
+-    RRX(env, R_EBP) = rreg(cpu->hvf_fd, HV_X86_RBP);
++    RRX(env, R_EAX) = rreg(cpu->hvf->fd, HV_X86_RAX);
++    RRX(env, R_EBX) = rreg(cpu->hvf->fd, HV_X86_RBX);
++    RRX(env, R_ECX) = rreg(cpu->hvf->fd, HV_X86_RCX);
++    RRX(env, R_EDX) = rreg(cpu->hvf->fd, HV_X86_RDX);
++    RRX(env, R_ESI) = rreg(cpu->hvf->fd, HV_X86_RSI);
++    RRX(env, R_EDI) = rreg(cpu->hvf->fd, HV_X86_RDI);
++    RRX(env, R_ESP) = rreg(cpu->hvf->fd, HV_X86_RSP);
++    RRX(env, R_EBP) = rreg(cpu->hvf->fd, HV_X86_RBP);
+     for (i = 8; i < 16; i++) {
+-        RRX(env, i) = rreg(cpu->hvf_fd, HV_X86_RAX + i);
++        RRX(env, i) = rreg(cpu->hvf->fd, HV_X86_RAX + i);
+     }
+ 
+-    env->eflags = rreg(cpu->hvf_fd, HV_X86_RFLAGS);
++    env->eflags = rreg(cpu->hvf->fd, HV_X86_RFLAGS);
+     rflags_to_lflags(env);
+-    env->eip = rreg(cpu->hvf_fd, HV_X86_RIP);
++    env->eip = rreg(cpu->hvf->fd, HV_X86_RIP);
+ }
+ 
+ void store_regs(struct CPUState *cpu)
+@@ -1443,20 +1443,20 @@ void store_regs(struct CPUState *cpu)
+     CPUX86State *env = &x86_cpu->env;
+ 
+     int i = 0;
+-    wreg(cpu->hvf_fd, HV_X86_RAX, RAX(env));
+-    wreg(cpu->hvf_fd, HV_X86_RBX, RBX(env));
+-    wreg(cpu->hvf_fd, HV_X86_RCX, RCX(env));
+-    wreg(cpu->hvf_fd, HV_X86_RDX, RDX(env));
+-    wreg(cpu->hvf_fd, HV_X86_RSI, RSI(env));
+-    wreg(cpu->hvf_fd, HV_X86_RDI, RDI(env));
+-    wreg(cpu->hvf_fd, HV_X86_RBP, RBP(env));
+-    wreg(cpu->hvf_fd, HV_X86_RSP, RSP(env));
++    wreg(cpu->hvf->fd, HV_X86_RAX, RAX(env));
++    wreg(cpu->hvf->fd, HV_X86_RBX, RBX(env));
++    wreg(cpu->hvf->fd, HV_X86_RCX, RCX(env));
++    wreg(cpu->hvf->fd, HV_X86_RDX, RDX(env));
++    wreg(cpu->hvf->fd, HV_X86_RSI, RSI(env));
++    wreg(cpu->hvf->fd, HV_X86_RDI, RDI(env));
++    wreg(cpu->hvf->fd, HV_X86_RBP, RBP(env));
++    wreg(cpu->hvf->fd, HV_X86_RSP, RSP(env));
+     for (i = 8; i < 16; i++) {
+-        wreg(cpu->hvf_fd, HV_X86_RAX + i, RRX(env, i));
++        wreg(cpu->hvf->fd, HV_X86_RAX + i, RRX(env, i));
+     }
+ 
+     lflags_to_rflags(env);
+-    wreg(cpu->hvf_fd, HV_X86_RFLAGS, env->eflags);
++    wreg(cpu->hvf->fd, HV_X86_RFLAGS, env->eflags);
+     macvm_set_rip(cpu, env->eip);
+ }
+ 
+diff --git a/target/i386/hvf/x86_mmu.c b/target/i386/hvf/x86_mmu.c
+index 882a6237eea..b7e3f8568f6 100644
+--- a/target/i386/hvf/x86_mmu.c
++++ b/target/i386/hvf/x86_mmu.c
+@@ -128,7 +128,7 @@ static bool test_pt_entry(struct CPUState *cpu, struct gpt_translation *pt,
+         pt->err_code |= MMU_PAGE_PT;
+     }
+ 
+-    uint32_t cr0 = rvmcs(cpu->hvf_fd, VMCS_GUEST_CR0);
++    uint32_t cr0 = rvmcs(cpu->hvf->fd, VMCS_GUEST_CR0);
+     /* check protection */
+     if (cr0 & CR0_WP) {
+         if (pt->write_access && !pte_write_access(pte)) {
+@@ -173,7 +173,7 @@ static bool walk_gpt(struct CPUState *cpu, target_ulong addr, int err_code,
+ {
+     int top_level, level;
+     bool is_large = false;
+-    target_ulong cr3 = rvmcs(cpu->hvf_fd, VMCS_GUEST_CR3);
++    target_ulong cr3 = rvmcs(cpu->hvf->fd, VMCS_GUEST_CR3);
+     uint64_t page_mask = pae ? PAE_PTE_PAGE_MASK : LEGACY_PTE_PAGE_MASK;
+     
+     memset(pt, 0, sizeof(*pt));
+diff --git a/target/i386/hvf/x86_task.c b/target/i386/hvf/x86_task.c
+index 6f04478b3ad..c25c8ec88f0 100644
+--- a/target/i386/hvf/x86_task.c
++++ b/target/i386/hvf/x86_task.c
+@@ -62,7 +62,7 @@ static void load_state_from_tss32(CPUState *cpu, struct x86_tss_segment32 *tss)
+     X86CPU *x86_cpu = X86_CPU(cpu);
+     CPUX86State *env = &x86_cpu->env;
+ 
+-    wvmcs(cpu->hvf_fd, VMCS_GUEST_CR3, tss->cr3);
++    wvmcs(cpu->hvf->fd, VMCS_GUEST_CR3, tss->cr3);
+ 
+     env->eip = tss->eip;
+     env->eflags = tss->eflags | 2;
+@@ -111,11 +111,11 @@ static int task_switch_32(CPUState *cpu, x68_segment_selector tss_sel, x68_segme
+ 
+ void vmx_handle_task_switch(CPUState *cpu, x68_segment_selector tss_sel, int reason, bool gate_valid, uint8_t gate, uint64_t gate_type)
+ {
+-    uint64_t rip = rreg(cpu->hvf_fd, HV_X86_RIP);
++    uint64_t rip = rreg(cpu->hvf->fd, HV_X86_RIP);
+     if (!gate_valid || (gate_type != VMCS_INTR_T_HWEXCEPTION &&
+                         gate_type != VMCS_INTR_T_HWINTR &&
+                         gate_type != VMCS_INTR_T_NMI)) {
+-        int ins_len = rvmcs(cpu->hvf_fd, VMCS_EXIT_INSTRUCTION_LENGTH);
++        int ins_len = rvmcs(cpu->hvf->fd, VMCS_EXIT_INSTRUCTION_LENGTH);
+         macvm_set_rip(cpu, rip + ins_len);
+         return;
+     }
+@@ -174,12 +174,12 @@ void vmx_handle_task_switch(CPUState *cpu, x68_segment_selector tss_sel, int rea
+         //ret = task_switch_16(cpu, tss_sel, old_tss_sel, old_tss_base, &next_tss_desc);
+         VM_PANIC("task_switch_16");
+ 
+-    macvm_set_cr0(cpu->hvf_fd, rvmcs(cpu->hvf_fd, VMCS_GUEST_CR0) | CR0_TS);
++    macvm_set_cr0(cpu->hvf->fd, rvmcs(cpu->hvf->fd, VMCS_GUEST_CR0) | CR0_TS);
+     x86_segment_descriptor_to_vmx(cpu, tss_sel, &next_tss_desc, &vmx_seg);
+     vmx_write_segment_descriptor(cpu, &vmx_seg, R_TR);
+ 
+     store_regs(cpu);
+ 
+-    hv_vcpu_invalidate_tlb(cpu->hvf_fd);
+-    hv_vcpu_flush(cpu->hvf_fd);
++    hv_vcpu_invalidate_tlb(cpu->hvf->fd);
++    hv_vcpu_flush(cpu->hvf->fd);
+ }
+diff --git a/target/i386/hvf/x86hvf.c b/target/i386/hvf/x86hvf.c
+index 89b8e9d87af..0f2aeb1cf85 100644
+--- a/target/i386/hvf/x86hvf.c
++++ b/target/i386/hvf/x86hvf.c
+@@ -82,7 +82,7 @@ void hvf_put_xsave(CPUState *cpu_state)
+ 
+     x86_cpu_xsave_all_areas(X86_CPU(cpu_state), xsave);
+ 
+-    if (hv_vcpu_write_fpstate(cpu_state->hvf_fd, (void*)xsave, 4096)) {
++    if (hv_vcpu_write_fpstate(cpu_state->hvf->fd, (void*)xsave, 4096)) {
+         abort();
+     }
+ }
+@@ -92,19 +92,19 @@ void hvf_put_segments(CPUState *cpu_state)
+     CPUX86State *env = &X86_CPU(cpu_state)->env;
+     struct vmx_segment seg;
+     
+-    wvmcs(cpu_state->hvf_fd, VMCS_GUEST_IDTR_LIMIT, env->idt.limit);
+-    wvmcs(cpu_state->hvf_fd, VMCS_GUEST_IDTR_BASE, env->idt.base);
++    wvmcs(cpu_state->hvf->fd, VMCS_GUEST_IDTR_LIMIT, env->idt.limit);
++    wvmcs(cpu_state->hvf->fd, VMCS_GUEST_IDTR_BASE, env->idt.base);
+ 
+-    wvmcs(cpu_state->hvf_fd, VMCS_GUEST_GDTR_LIMIT, env->gdt.limit);
+-    wvmcs(cpu_state->hvf_fd, VMCS_GUEST_GDTR_BASE, env->gdt.base);
++    wvmcs(cpu_state->hvf->fd, VMCS_GUEST_GDTR_LIMIT, env->gdt.limit);
++    wvmcs(cpu_state->hvf->fd, VMCS_GUEST_GDTR_BASE, env->gdt.base);
+ 
+-    /* wvmcs(cpu_state->hvf_fd, VMCS_GUEST_CR2, env->cr[2]); */
+-    wvmcs(cpu_state->hvf_fd, VMCS_GUEST_CR3, env->cr[3]);
++    /* wvmcs(cpu_state->hvf->fd, VMCS_GUEST_CR2, env->cr[2]); */
++    wvmcs(cpu_state->hvf->fd, VMCS_GUEST_CR3, env->cr[3]);
+     vmx_update_tpr(cpu_state);
+-    wvmcs(cpu_state->hvf_fd, VMCS_GUEST_IA32_EFER, env->efer);
++    wvmcs(cpu_state->hvf->fd, VMCS_GUEST_IA32_EFER, env->efer);
+ 
+-    macvm_set_cr4(cpu_state->hvf_fd, env->cr[4]);
+-    macvm_set_cr0(cpu_state->hvf_fd, env->cr[0]);
++    macvm_set_cr4(cpu_state->hvf->fd, env->cr[4]);
++    macvm_set_cr0(cpu_state->hvf->fd, env->cr[0]);
+ 
+     hvf_set_segment(cpu_state, &seg, &env->segs[R_CS], false);
+     vmx_write_segment_descriptor(cpu_state, &seg, R_CS);
+@@ -130,31 +130,31 @@ void hvf_put_segments(CPUState *cpu_state)
+     hvf_set_segment(cpu_state, &seg, &env->ldt, false);
+     vmx_write_segment_descriptor(cpu_state, &seg, R_LDTR);
+     
+-    hv_vcpu_flush(cpu_state->hvf_fd);
++    hv_vcpu_flush(cpu_state->hvf->fd);
+ }
+     
+ void hvf_put_msrs(CPUState *cpu_state)
+ {
+     CPUX86State *env = &X86_CPU(cpu_state)->env;
+ 
+-    hv_vcpu_write_msr(cpu_state->hvf_fd, MSR_IA32_SYSENTER_CS,
++    hv_vcpu_write_msr(cpu_state->hvf->fd, MSR_IA32_SYSENTER_CS,
+                       env->sysenter_cs);
+-    hv_vcpu_write_msr(cpu_state->hvf_fd, MSR_IA32_SYSENTER_ESP,
++    hv_vcpu_write_msr(cpu_state->hvf->fd, MSR_IA32_SYSENTER_ESP,
+                       env->sysenter_esp);
+-    hv_vcpu_write_msr(cpu_state->hvf_fd, MSR_IA32_SYSENTER_EIP,
++    hv_vcpu_write_msr(cpu_state->hvf->fd, MSR_IA32_SYSENTER_EIP,
+                       env->sysenter_eip);
+ 
+-    hv_vcpu_write_msr(cpu_state->hvf_fd, MSR_STAR, env->star);
++    hv_vcpu_write_msr(cpu_state->hvf->fd, MSR_STAR, env->star);
+ 
+ #ifdef TARGET_X86_64
+-    hv_vcpu_write_msr(cpu_state->hvf_fd, MSR_CSTAR, env->cstar);
+-    hv_vcpu_write_msr(cpu_state->hvf_fd, MSR_KERNELGSBASE, env->kernelgsbase);
+-    hv_vcpu_write_msr(cpu_state->hvf_fd, MSR_FMASK, env->fmask);
+-    hv_vcpu_write_msr(cpu_state->hvf_fd, MSR_LSTAR, env->lstar);
++    hv_vcpu_write_msr(cpu_state->hvf->fd, MSR_CSTAR, env->cstar);
++    hv_vcpu_write_msr(cpu_state->hvf->fd, MSR_KERNELGSBASE, env->kernelgsbase);
++    hv_vcpu_write_msr(cpu_state->hvf->fd, MSR_FMASK, env->fmask);
++    hv_vcpu_write_msr(cpu_state->hvf->fd, MSR_LSTAR, env->lstar);
+ #endif
+ 
+-    hv_vcpu_write_msr(cpu_state->hvf_fd, MSR_GSBASE, env->segs[R_GS].base);
+-    hv_vcpu_write_msr(cpu_state->hvf_fd, MSR_FSBASE, env->segs[R_FS].base);
++    hv_vcpu_write_msr(cpu_state->hvf->fd, MSR_GSBASE, env->segs[R_GS].base);
++    hv_vcpu_write_msr(cpu_state->hvf->fd, MSR_FSBASE, env->segs[R_FS].base);
+ }
+ 
+ 
+@@ -164,7 +164,7 @@ void hvf_get_xsave(CPUState *cpu_state)
+ 
+     xsave = X86_CPU(cpu_state)->env.xsave_buf;
+ 
+-    if (hv_vcpu_read_fpstate(cpu_state->hvf_fd, (void*)xsave, 4096)) {
++    if (hv_vcpu_read_fpstate(cpu_state->hvf->fd, (void*)xsave, 4096)) {
+         abort();
+     }
+ 
+@@ -203,17 +203,17 @@ void hvf_get_segments(CPUState *cpu_state)
+     vmx_read_segment_descriptor(cpu_state, &seg, R_LDTR);
+     hvf_get_segment(&env->ldt, &seg);
+ 
+-    env->idt.limit = rvmcs(cpu_state->hvf_fd, VMCS_GUEST_IDTR_LIMIT);
+-    env->idt.base = rvmcs(cpu_state->hvf_fd, VMCS_GUEST_IDTR_BASE);
+-    env->gdt.limit = rvmcs(cpu_state->hvf_fd, VMCS_GUEST_GDTR_LIMIT);
+-    env->gdt.base = rvmcs(cpu_state->hvf_fd, VMCS_GUEST_GDTR_BASE);
++    env->idt.limit = rvmcs(cpu_state->hvf->fd, VMCS_GUEST_IDTR_LIMIT);
++    env->idt.base = rvmcs(cpu_state->hvf->fd, VMCS_GUEST_IDTR_BASE);
++    env->gdt.limit = rvmcs(cpu_state->hvf->fd, VMCS_GUEST_GDTR_LIMIT);
++    env->gdt.base = rvmcs(cpu_state->hvf->fd, VMCS_GUEST_GDTR_BASE);
+ 
+-    env->cr[0] = rvmcs(cpu_state->hvf_fd, VMCS_GUEST_CR0);
++    env->cr[0] = rvmcs(cpu_state->hvf->fd, VMCS_GUEST_CR0);
+     env->cr[2] = 0;
+-    env->cr[3] = rvmcs(cpu_state->hvf_fd, VMCS_GUEST_CR3);
+-    env->cr[4] = rvmcs(cpu_state->hvf_fd, VMCS_GUEST_CR4);
++    env->cr[3] = rvmcs(cpu_state->hvf->fd, VMCS_GUEST_CR3);
++    env->cr[4] = rvmcs(cpu_state->hvf->fd, VMCS_GUEST_CR4);
+     
+-    env->efer = rvmcs(cpu_state->hvf_fd, VMCS_GUEST_IA32_EFER);
++    env->efer = rvmcs(cpu_state->hvf->fd, VMCS_GUEST_IA32_EFER);
+ }
+ 
+ void hvf_get_msrs(CPUState *cpu_state)
+@@ -221,27 +221,27 @@ void hvf_get_msrs(CPUState *cpu_state)
+     CPUX86State *env = &X86_CPU(cpu_state)->env;
+     uint64_t tmp;
+     
+-    hv_vcpu_read_msr(cpu_state->hvf_fd, MSR_IA32_SYSENTER_CS, &tmp);
++    hv_vcpu_read_msr(cpu_state->hvf->fd, MSR_IA32_SYSENTER_CS, &tmp);
+     env->sysenter_cs = tmp;
+     
+-    hv_vcpu_read_msr(cpu_state->hvf_fd, MSR_IA32_SYSENTER_ESP, &tmp);
++    hv_vcpu_read_msr(cpu_state->hvf->fd, MSR_IA32_SYSENTER_ESP, &tmp);
+     env->sysenter_esp = tmp;
+ 
+-    hv_vcpu_read_msr(cpu_state->hvf_fd, MSR_IA32_SYSENTER_EIP, &tmp);
++    hv_vcpu_read_msr(cpu_state->hvf->fd, MSR_IA32_SYSENTER_EIP, &tmp);
+     env->sysenter_eip = tmp;
+ 
+-    hv_vcpu_read_msr(cpu_state->hvf_fd, MSR_STAR, &env->star);
++    hv_vcpu_read_msr(cpu_state->hvf->fd, MSR_STAR, &env->star);
+ 
+ #ifdef TARGET_X86_64
+-    hv_vcpu_read_msr(cpu_state->hvf_fd, MSR_CSTAR, &env->cstar);
+-    hv_vcpu_read_msr(cpu_state->hvf_fd, MSR_KERNELGSBASE, &env->kernelgsbase);
+-    hv_vcpu_read_msr(cpu_state->hvf_fd, MSR_FMASK, &env->fmask);
+-    hv_vcpu_read_msr(cpu_state->hvf_fd, MSR_LSTAR, &env->lstar);
++    hv_vcpu_read_msr(cpu_state->hvf->fd, MSR_CSTAR, &env->cstar);
++    hv_vcpu_read_msr(cpu_state->hvf->fd, MSR_KERNELGSBASE, &env->kernelgsbase);
++    hv_vcpu_read_msr(cpu_state->hvf->fd, MSR_FMASK, &env->fmask);
++    hv_vcpu_read_msr(cpu_state->hvf->fd, MSR_LSTAR, &env->lstar);
+ #endif
+ 
+-    hv_vcpu_read_msr(cpu_state->hvf_fd, MSR_IA32_APICBASE, &tmp);
++    hv_vcpu_read_msr(cpu_state->hvf->fd, MSR_IA32_APICBASE, &tmp);
+     
+-    env->tsc = rdtscp() + rvmcs(cpu_state->hvf_fd, VMCS_TSC_OFFSET);
++    env->tsc = rdtscp() + rvmcs(cpu_state->hvf->fd, VMCS_TSC_OFFSET);
+ }
+ 
+ int hvf_put_registers(CPUState *cpu_state)
+@@ -249,26 +249,26 @@ int hvf_put_registers(CPUState *cpu_state)
+     X86CPU *x86cpu = X86_CPU(cpu_state);
+     CPUX86State *env = &x86cpu->env;
+ 
+-    wreg(cpu_state->hvf_fd, HV_X86_RAX, env->regs[R_EAX]);
+-    wreg(cpu_state->hvf_fd, HV_X86_RBX, env->regs[R_EBX]);
+-    wreg(cpu_state->hvf_fd, HV_X86_RCX, env->regs[R_ECX]);
+-    wreg(cpu_state->hvf_fd, HV_X86_RDX, env->regs[R_EDX]);
+-    wreg(cpu_state->hvf_fd, HV_X86_RBP, env->regs[R_EBP]);
+-    wreg(cpu_state->hvf_fd, HV_X86_RSP, env->regs[R_ESP]);
+-    wreg(cpu_state->hvf_fd, HV_X86_RSI, env->regs[R_ESI]);
+-    wreg(cpu_state->hvf_fd, HV_X86_RDI, env->regs[R_EDI]);
+-    wreg(cpu_state->hvf_fd, HV_X86_R8, env->regs[8]);
+-    wreg(cpu_state->hvf_fd, HV_X86_R9, env->regs[9]);
+-    wreg(cpu_state->hvf_fd, HV_X86_R10, env->regs[10]);
+-    wreg(cpu_state->hvf_fd, HV_X86_R11, env->regs[11]);
+-    wreg(cpu_state->hvf_fd, HV_X86_R12, env->regs[12]);
+-    wreg(cpu_state->hvf_fd, HV_X86_R13, env->regs[13]);
+-    wreg(cpu_state->hvf_fd, HV_X86_R14, env->regs[14]);
+-    wreg(cpu_state->hvf_fd, HV_X86_R15, env->regs[15]);
+-    wreg(cpu_state->hvf_fd, HV_X86_RFLAGS, env->eflags);
+-    wreg(cpu_state->hvf_fd, HV_X86_RIP, env->eip);
++    wreg(cpu_state->hvf->fd, HV_X86_RAX, env->regs[R_EAX]);
++    wreg(cpu_state->hvf->fd, HV_X86_RBX, env->regs[R_EBX]);
++    wreg(cpu_state->hvf->fd, HV_X86_RCX, env->regs[R_ECX]);
++    wreg(cpu_state->hvf->fd, HV_X86_RDX, env->regs[R_EDX]);
++    wreg(cpu_state->hvf->fd, HV_X86_RBP, env->regs[R_EBP]);
++    wreg(cpu_state->hvf->fd, HV_X86_RSP, env->regs[R_ESP]);
++    wreg(cpu_state->hvf->fd, HV_X86_RSI, env->regs[R_ESI]);
++    wreg(cpu_state->hvf->fd, HV_X86_RDI, env->regs[R_EDI]);
++    wreg(cpu_state->hvf->fd, HV_X86_R8, env->regs[8]);
++    wreg(cpu_state->hvf->fd, HV_X86_R9, env->regs[9]);
++    wreg(cpu_state->hvf->fd, HV_X86_R10, env->regs[10]);
++    wreg(cpu_state->hvf->fd, HV_X86_R11, env->regs[11]);
++    wreg(cpu_state->hvf->fd, HV_X86_R12, env->regs[12]);
++    wreg(cpu_state->hvf->fd, HV_X86_R13, env->regs[13]);
++    wreg(cpu_state->hvf->fd, HV_X86_R14, env->regs[14]);
++    wreg(cpu_state->hvf->fd, HV_X86_R15, env->regs[15]);
++    wreg(cpu_state->hvf->fd, HV_X86_RFLAGS, env->eflags);
++    wreg(cpu_state->hvf->fd, HV_X86_RIP, env->eip);
+    
+-    wreg(cpu_state->hvf_fd, HV_X86_XCR0, env->xcr0);
++    wreg(cpu_state->hvf->fd, HV_X86_XCR0, env->xcr0);
+     
+     hvf_put_xsave(cpu_state);
+     
+@@ -276,14 +276,14 @@ int hvf_put_registers(CPUState *cpu_state)
+     
+     hvf_put_msrs(cpu_state);
+     
+-    wreg(cpu_state->hvf_fd, HV_X86_DR0, env->dr[0]);
+-    wreg(cpu_state->hvf_fd, HV_X86_DR1, env->dr[1]);
+-    wreg(cpu_state->hvf_fd, HV_X86_DR2, env->dr[2]);
+-    wreg(cpu_state->hvf_fd, HV_X86_DR3, env->dr[3]);
+-    wreg(cpu_state->hvf_fd, HV_X86_DR4, env->dr[4]);
+-    wreg(cpu_state->hvf_fd, HV_X86_DR5, env->dr[5]);
+-    wreg(cpu_state->hvf_fd, HV_X86_DR6, env->dr[6]);
+-    wreg(cpu_state->hvf_fd, HV_X86_DR7, env->dr[7]);
++    wreg(cpu_state->hvf->fd, HV_X86_DR0, env->dr[0]);
++    wreg(cpu_state->hvf->fd, HV_X86_DR1, env->dr[1]);
++    wreg(cpu_state->hvf->fd, HV_X86_DR2, env->dr[2]);
++    wreg(cpu_state->hvf->fd, HV_X86_DR3, env->dr[3]);
++    wreg(cpu_state->hvf->fd, HV_X86_DR4, env->dr[4]);
++    wreg(cpu_state->hvf->fd, HV_X86_DR5, env->dr[5]);
++    wreg(cpu_state->hvf->fd, HV_X86_DR6, env->dr[6]);
++    wreg(cpu_state->hvf->fd, HV_X86_DR7, env->dr[7]);
+     
+     return 0;
+ }
+@@ -293,40 +293,40 @@ int hvf_get_registers(CPUState *cpu_state)
+     X86CPU *x86cpu = X86_CPU(cpu_state);
+     CPUX86State *env = &x86cpu->env;
+ 
+-    env->regs[R_EAX] = rreg(cpu_state->hvf_fd, HV_X86_RAX);
+-    env->regs[R_EBX] = rreg(cpu_state->hvf_fd, HV_X86_RBX);
+-    env->regs[R_ECX] = rreg(cpu_state->hvf_fd, HV_X86_RCX);
+-    env->regs[R_EDX] = rreg(cpu_state->hvf_fd, HV_X86_RDX);
+-    env->regs[R_EBP] = rreg(cpu_state->hvf_fd, HV_X86_RBP);
+-    env->regs[R_ESP] = rreg(cpu_state->hvf_fd, HV_X86_RSP);
+-    env->regs[R_ESI] = rreg(cpu_state->hvf_fd, HV_X86_RSI);
+-    env->regs[R_EDI] = rreg(cpu_state->hvf_fd, HV_X86_RDI);
+-    env->regs[8] = rreg(cpu_state->hvf_fd, HV_X86_R8);
+-    env->regs[9] = rreg(cpu_state->hvf_fd, HV_X86_R9);
+-    env->regs[10] = rreg(cpu_state->hvf_fd, HV_X86_R10);
+-    env->regs[11] = rreg(cpu_state->hvf_fd, HV_X86_R11);
+-    env->regs[12] = rreg(cpu_state->hvf_fd, HV_X86_R12);
+-    env->regs[13] = rreg(cpu_state->hvf_fd, HV_X86_R13);
+-    env->regs[14] = rreg(cpu_state->hvf_fd, HV_X86_R14);
+-    env->regs[15] = rreg(cpu_state->hvf_fd, HV_X86_R15);
++    env->regs[R_EAX] = rreg(cpu_state->hvf->fd, HV_X86_RAX);
++    env->regs[R_EBX] = rreg(cpu_state->hvf->fd, HV_X86_RBX);
++    env->regs[R_ECX] = rreg(cpu_state->hvf->fd, HV_X86_RCX);
++    env->regs[R_EDX] = rreg(cpu_state->hvf->fd, HV_X86_RDX);
++    env->regs[R_EBP] = rreg(cpu_state->hvf->fd, HV_X86_RBP);
++    env->regs[R_ESP] = rreg(cpu_state->hvf->fd, HV_X86_RSP);
++    env->regs[R_ESI] = rreg(cpu_state->hvf->fd, HV_X86_RSI);
++    env->regs[R_EDI] = rreg(cpu_state->hvf->fd, HV_X86_RDI);
++    env->regs[8] = rreg(cpu_state->hvf->fd, HV_X86_R8);
++    env->regs[9] = rreg(cpu_state->hvf->fd, HV_X86_R9);
++    env->regs[10] = rreg(cpu_state->hvf->fd, HV_X86_R10);
++    env->regs[11] = rreg(cpu_state->hvf->fd, HV_X86_R11);
++    env->regs[12] = rreg(cpu_state->hvf->fd, HV_X86_R12);
++    env->regs[13] = rreg(cpu_state->hvf->fd, HV_X86_R13);
++    env->regs[14] = rreg(cpu_state->hvf->fd, HV_X86_R14);
++    env->regs[15] = rreg(cpu_state->hvf->fd, HV_X86_R15);
+     
+-    env->eflags = rreg(cpu_state->hvf_fd, HV_X86_RFLAGS);
+-    env->eip = rreg(cpu_state->hvf_fd, HV_X86_RIP);
++    env->eflags = rreg(cpu_state->hvf->fd, HV_X86_RFLAGS);
++    env->eip = rreg(cpu_state->hvf->fd, HV_X86_RIP);
+    
+     hvf_get_xsave(cpu_state);
+-    env->xcr0 = rreg(cpu_state->hvf_fd, HV_X86_XCR0);
++    env->xcr0 = rreg(cpu_state->hvf->fd, HV_X86_XCR0);
+     
+     hvf_get_segments(cpu_state);
+     hvf_get_msrs(cpu_state);
+     
+-    env->dr[0] = rreg(cpu_state->hvf_fd, HV_X86_DR0);
+-    env->dr[1] = rreg(cpu_state->hvf_fd, HV_X86_DR1);
+-    env->dr[2] = rreg(cpu_state->hvf_fd, HV_X86_DR2);
+-    env->dr[3] = rreg(cpu_state->hvf_fd, HV_X86_DR3);
+-    env->dr[4] = rreg(cpu_state->hvf_fd, HV_X86_DR4);
+-    env->dr[5] = rreg(cpu_state->hvf_fd, HV_X86_DR5);
+-    env->dr[6] = rreg(cpu_state->hvf_fd, HV_X86_DR6);
+-    env->dr[7] = rreg(cpu_state->hvf_fd, HV_X86_DR7);
++    env->dr[0] = rreg(cpu_state->hvf->fd, HV_X86_DR0);
++    env->dr[1] = rreg(cpu_state->hvf->fd, HV_X86_DR1);
++    env->dr[2] = rreg(cpu_state->hvf->fd, HV_X86_DR2);
++    env->dr[3] = rreg(cpu_state->hvf->fd, HV_X86_DR3);
++    env->dr[4] = rreg(cpu_state->hvf->fd, HV_X86_DR4);
++    env->dr[5] = rreg(cpu_state->hvf->fd, HV_X86_DR5);
++    env->dr[6] = rreg(cpu_state->hvf->fd, HV_X86_DR6);
++    env->dr[7] = rreg(cpu_state->hvf->fd, HV_X86_DR7);
+     
+     x86_update_hflags(env);
+     return 0;
+@@ -335,16 +335,16 @@ int hvf_get_registers(CPUState *cpu_state)
+ static void vmx_set_int_window_exiting(CPUState *cpu)
+ {
+      uint64_t val;
+-     val = rvmcs(cpu->hvf_fd, VMCS_PRI_PROC_BASED_CTLS);
+-     wvmcs(cpu->hvf_fd, VMCS_PRI_PROC_BASED_CTLS, val |
++     val = rvmcs(cpu->hvf->fd, VMCS_PRI_PROC_BASED_CTLS);
++     wvmcs(cpu->hvf->fd, VMCS_PRI_PROC_BASED_CTLS, val |
+              VMCS_PRI_PROC_BASED_CTLS_INT_WINDOW_EXITING);
+ }
+ 
+ void vmx_clear_int_window_exiting(CPUState *cpu)
+ {
+      uint64_t val;
+-     val = rvmcs(cpu->hvf_fd, VMCS_PRI_PROC_BASED_CTLS);
+-     wvmcs(cpu->hvf_fd, VMCS_PRI_PROC_BASED_CTLS, val &
++     val = rvmcs(cpu->hvf->fd, VMCS_PRI_PROC_BASED_CTLS);
++     wvmcs(cpu->hvf->fd, VMCS_PRI_PROC_BASED_CTLS, val &
+              ~VMCS_PRI_PROC_BASED_CTLS_INT_WINDOW_EXITING);
+ }
+ 
+@@ -380,7 +380,7 @@ bool hvf_inject_interrupts(CPUState *cpu_state)
+     uint64_t info = 0;
+     if (have_event) {
+         info = vector | intr_type | VMCS_INTR_VALID;
+-        uint64_t reason = rvmcs(cpu_state->hvf_fd, VMCS_EXIT_REASON);
++        uint64_t reason = rvmcs(cpu_state->hvf->fd, VMCS_EXIT_REASON);
+         if (env->nmi_injected && reason != EXIT_REASON_TASK_SWITCH) {
+             vmx_clear_nmi_blocking(cpu_state);
+         }
+@@ -389,17 +389,17 @@ bool hvf_inject_interrupts(CPUState *cpu_state)
+             info &= ~(1 << 12); /* clear undefined bit */
+             if (intr_type == VMCS_INTR_T_SWINTR ||
+                 intr_type == VMCS_INTR_T_SWEXCEPTION) {
+-                wvmcs(cpu_state->hvf_fd, VMCS_ENTRY_INST_LENGTH, env->ins_len);
++                wvmcs(cpu_state->hvf->fd, VMCS_ENTRY_INST_LENGTH, env->ins_len);
+             }
+             
+             if (env->has_error_code) {
+-                wvmcs(cpu_state->hvf_fd, VMCS_ENTRY_EXCEPTION_ERROR,
++                wvmcs(cpu_state->hvf->fd, VMCS_ENTRY_EXCEPTION_ERROR,
+                       env->error_code);
+                 /* Indicate that VMCS_ENTRY_EXCEPTION_ERROR is valid */
+                 info |= VMCS_INTR_DEL_ERRCODE;
+             }
+             /*printf("reinject  %lx err %d\n", info, err);*/
+-            wvmcs(cpu_state->hvf_fd, VMCS_ENTRY_INTR_INFO, info);
++            wvmcs(cpu_state->hvf->fd, VMCS_ENTRY_INTR_INFO, info);
+         };
+     }
+ 
+@@ -407,7 +407,7 @@ bool hvf_inject_interrupts(CPUState *cpu_state)
+         if (!(env->hflags2 & HF2_NMI_MASK) && !(info & VMCS_INTR_VALID)) {
+             cpu_state->interrupt_request &= ~CPU_INTERRUPT_NMI;
+             info = VMCS_INTR_VALID | VMCS_INTR_T_NMI | EXCP02_NMI;
+-            wvmcs(cpu_state->hvf_fd, VMCS_ENTRY_INTR_INFO, info);
++            wvmcs(cpu_state->hvf->fd, VMCS_ENTRY_INTR_INFO, info);
+         } else {
+             vmx_set_nmi_window_exiting(cpu_state);
+         }
+@@ -419,7 +419,7 @@ bool hvf_inject_interrupts(CPUState *cpu_state)
+         int line = cpu_get_pic_interrupt(&x86cpu->env);
+         cpu_state->interrupt_request &= ~CPU_INTERRUPT_HARD;
+         if (line >= 0) {
+-            wvmcs(cpu_state->hvf_fd, VMCS_ENTRY_INTR_INFO, line |
++            wvmcs(cpu_state->hvf->fd, VMCS_ENTRY_INTR_INFO, line |
+                   VMCS_INTR_VALID | VMCS_INTR_T_HWINTR);
+         }
+     }
+@@ -435,7 +435,7 @@ int hvf_process_events(CPUState *cpu_state)
+     X86CPU *cpu = X86_CPU(cpu_state);
+     CPUX86State *env = &cpu->env;
+ 
+-    env->eflags = rreg(cpu_state->hvf_fd, HV_X86_RFLAGS);
++    env->eflags = rreg(cpu_state->hvf->fd, HV_X86_RFLAGS);
+ 
+     if (cpu_state->interrupt_request & CPU_INTERRUPT_INIT) {
+         cpu_synchronize_state(cpu_state);
+
+From 8dfe3cf84127d91d3e07b622ad207ae6e72288f9 Mon Sep 17 00:00:00 2001
+From: Alexander Graf <agraf@csgraf.de>
+Date: Wed, 20 Jan 2021 23:44:38 +0100
+Subject: [PATCH 05/11] arm: Set PSCI to 0.2 for HVF
+
+In Hypervisor.framework, we just pass PSCI calls straight on to the QEMU emulation
+of it. That means, if TCG is compatible with PSCI 0.2, so are we. Let's transpose
+that fact in code too.
+
+Signed-off-by: Alexander Graf <agraf@csgraf.de>
+Reviewed-by: Roman Bolshakov <r.bolshakov@yadro.com>
+
+Message-Id: <20210120224444.71840-6-agraf@csgraf.de>
+---
+ target/arm/cpu.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/target/arm/cpu.c b/target/arm/cpu.c
+index 40142ac141e..f1929b5ebae 100644
+--- a/target/arm/cpu.c
++++ b/target/arm/cpu.c
+@@ -1063,8 +1063,8 @@ static void arm_cpu_initfn(Object *obj)
+     cpu->psci_version = 1; /* By default assume PSCI v0.1 */
+     cpu->kvm_target = QEMU_KVM_ARM_TARGET_NONE;
+ 
+-    if (tcg_enabled()) {
+-        cpu->psci_version = 2; /* TCG implements PSCI 0.2 */
++    if (tcg_enabled() || hvf_enabled()) {
++        cpu->psci_version = 2; /* TCG and HVF implement PSCI 0.2 */
+     }
+ }
+ 
+
+From 75656d0bb49963653c63f68747f7b011b3d73484 Mon Sep 17 00:00:00 2001
+From: Alexander Graf <agraf@csgraf.de>
+Date: Wed, 20 Jan 2021 23:44:39 +0100
+Subject: [PATCH 06/11] hvf: Simplify post reset/init/loadvm hooks
+
+The hooks we have that call us after reset, init and loadvm really all
+just want to say "The reference of all register state is in the QEMU
+vcpu struct, please push it".
+
+We already have a working pushing mechanism though called cpu->vcpu_dirty,
+so we can just reuse that for all of the above, syncing state properly the
+next time we actually execute a vCPU.
+
+This fixes PSCI resets on ARM, as they modify CPU state even after the
+post init call has completed, but before we execute the vCPU again.
+
+To also make the scheme work for x86, we have to make sure we don't
+move stale eflags into our env when the vcpu state is dirty.
+
+Signed-off-by: Alexander Graf <agraf@csgraf.de>
+Reviewed-by: Roman Bolshakov <r.bolshakov@yadro.com>
+Tested-by: Roman Bolshakov <r.bolshakov@yadro.com>
+Message-Id: <20210120224444.71840-7-agraf@csgraf.de>
+---
+ accel/hvf/hvf-cpus.c     | 27 +++++++--------------------
+ target/i386/hvf/x86hvf.c |  5 ++++-
+ 2 files changed, 11 insertions(+), 21 deletions(-)
+
+diff --git a/accel/hvf/hvf-cpus.c b/accel/hvf/hvf-cpus.c
+index 2c6796604a1..a324da2757e 100644
+--- a/accel/hvf/hvf-cpus.c
++++ b/accel/hvf/hvf-cpus.c
+@@ -275,39 +275,26 @@ static void hvf_cpu_synchronize_state(CPUState *cpu)
+     }
+ }
+ 
+-static void do_hvf_cpu_synchronize_post_reset(CPUState *cpu,
+-                                              run_on_cpu_data arg)
++static void do_hvf_cpu_synchronize_set_dirty(CPUState *cpu,
++                                             run_on_cpu_data arg)
+ {
+-    hvf_put_registers(cpu);
+-    cpu->vcpu_dirty = false;
++    /* QEMU state is the reference, push it to HVF now and on next entry */
++    cpu->vcpu_dirty = true;
+ }
+ 
+ static void hvf_cpu_synchronize_post_reset(CPUState *cpu)
+ {
+-    run_on_cpu(cpu, do_hvf_cpu_synchronize_post_reset, RUN_ON_CPU_NULL);
+-}
+-
+-static void do_hvf_cpu_synchronize_post_init(CPUState *cpu,
+-                                             run_on_cpu_data arg)
+-{
+-    hvf_put_registers(cpu);
+-    cpu->vcpu_dirty = false;
++    run_on_cpu(cpu, do_hvf_cpu_synchronize_set_dirty, RUN_ON_CPU_NULL);
+ }
+ 
+ static void hvf_cpu_synchronize_post_init(CPUState *cpu)
+ {
+-    run_on_cpu(cpu, do_hvf_cpu_synchronize_post_init, RUN_ON_CPU_NULL);
+-}
+-
+-static void do_hvf_cpu_synchronize_pre_loadvm(CPUState *cpu,
+-                                              run_on_cpu_data arg)
+-{
+-    cpu->vcpu_dirty = true;
++    run_on_cpu(cpu, do_hvf_cpu_synchronize_set_dirty, RUN_ON_CPU_NULL);
+ }
+ 
+ static void hvf_cpu_synchronize_pre_loadvm(CPUState *cpu)
+ {
+-    run_on_cpu(cpu, do_hvf_cpu_synchronize_pre_loadvm, RUN_ON_CPU_NULL);
++    run_on_cpu(cpu, do_hvf_cpu_synchronize_set_dirty, RUN_ON_CPU_NULL);
+ }
+ 
+ static void hvf_vcpu_destroy(CPUState *cpu)
+diff --git a/target/i386/hvf/x86hvf.c b/target/i386/hvf/x86hvf.c
+index 0f2aeb1cf85..3111c0be4c2 100644
+--- a/target/i386/hvf/x86hvf.c
++++ b/target/i386/hvf/x86hvf.c
+@@ -435,7 +435,10 @@ int hvf_process_events(CPUState *cpu_state)
+     X86CPU *cpu = X86_CPU(cpu_state);
+     CPUX86State *env = &cpu->env;
+ 
+-    env->eflags = rreg(cpu_state->hvf->fd, HV_X86_RFLAGS);
++    if (!cpu_state->vcpu_dirty) {
++        /* light weight sync for CPU_INTERRUPT_HARD and IF_MASK */
++        env->eflags = rreg(cpu_state->hvf->fd, HV_X86_RFLAGS);
++    }
+ 
+     if (cpu_state->interrupt_request & CPU_INTERRUPT_INIT) {
+         cpu_synchronize_state(cpu_state);
+
+From 8de3e1a132a30019a2cb334c2de68fb1b81d1fc5 Mon Sep 17 00:00:00 2001
+From: Alexander Graf <agraf@csgraf.de>
+Date: Wed, 20 Jan 2021 23:44:40 +0100
+Subject: [PATCH 07/11] hvf: Add Apple Silicon support
+
+With Apple Silicon available to the masses, it's a good time to add support
+for driving its virtualization extensions from QEMU.
+
+This patch adds all necessary architecture specific code to get basic VMs
+working. It's still pretty raw, but definitely functional.
+
+Known limitations:
+
+  - Vtimer acknowledgement is hacky
+  - Should implement more sysregs and fault on invalid ones then
+  - WFI handling is missing, need to marry it with vtimer
+
+Signed-off-by: Alexander Graf <agraf@csgraf.de>
+Reviewed-by: Roman Bolshakov <r.bolshakov@yadro.com>
+
+Message-Id: <20210120224444.71840-8-agraf@csgraf.de>
+---
+ MAINTAINERS              |   5 +
+ accel/hvf/hvf-cpus.c     |  14 +
+ include/sysemu/hvf_int.h |   9 +-
+ target/arm/hvf/hvf.c     | 618 +++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 645 insertions(+), 1 deletion(-)
+ create mode 100644 target/arm/hvf/hvf.c
+
+diff --git a/MAINTAINERS b/MAINTAINERS
+index bf8fe6aa843..8bfde30c4e0 100644
+--- a/MAINTAINERS
++++ b/MAINTAINERS
+@@ -442,6 +442,11 @@ F: accel/accel.c
+ F: accel/Makefile.objs
+ F: accel/stubs/Makefile.objs
+ 
++Apple Silicon HVF CPUs
++M: Alexander Graf <agraf@csgraf.de>
++S: Maintained
++F: target/arm/hvf/
++
+ X86 HVF CPUs
+ M: Cameron Esfahani <dirty@apple.com>
+ M: Roman Bolshakov <r.bolshakov@yadro.com>
+diff --git a/accel/hvf/hvf-cpus.c b/accel/hvf/hvf-cpus.c
+index a324da2757e..6d70ee742e0 100644
+--- a/accel/hvf/hvf-cpus.c
++++ b/accel/hvf/hvf-cpus.c
+@@ -58,6 +58,10 @@
+ #include "sysemu/runstate.h"
+ #include "qemu/guest-random.h"
+ 
++#ifdef __aarch64__
++#define HV_VM_DEFAULT NULL
++#endif
++
+ /* Memory slots */
+ 
+ struct mac_slot {
+@@ -328,7 +332,11 @@ static int hvf_init_vcpu(CPUState *cpu)
+     pthread_sigmask(SIG_BLOCK, NULL, &set);
+     sigdelset(&set, SIG_IPI);
+ 
++#ifdef __aarch64__
++    r = hv_vcpu_create(&cpu->hvf->fd, (hv_vcpu_exit_t **)&cpu->hvf->exit, NULL);
++#else
+     r = hv_vcpu_create((hv_vcpuid_t *)&cpu->hvf->fd, HV_VCPU_DEFAULT);
++#endif
+     cpu->vcpu_dirty = 1;
+     assert_hvf_ok(r);
+ 
+@@ -399,8 +407,14 @@ static void hvf_start_vcpu_thread(CPUState *cpu)
+                        cpu, QEMU_THREAD_JOINABLE);
+ }
+ 
++__attribute__((weak)) void hvf_kick_vcpu_thread(CPUState *cpu)
++{
++    cpus_kick_thread(cpu);
++}
++
+ static const CpusAccel hvf_cpus = {
+     .create_vcpu_thread = hvf_start_vcpu_thread,
++    .kick_vcpu_thread = hvf_kick_vcpu_thread,
+ 
+     .synchronize_post_reset = hvf_cpu_synchronize_post_reset,
+     .synchronize_post_init = hvf_cpu_synchronize_post_init,
+diff --git a/include/sysemu/hvf_int.h b/include/sysemu/hvf_int.h
+index 9d3cb53e474..c2ac6c8f975 100644
+--- a/include/sysemu/hvf_int.h
++++ b/include/sysemu/hvf_int.h
+@@ -11,7 +11,12 @@
+ #ifndef HVF_INT_H
+ #define HVF_INT_H
+ 
++#include "qemu/osdep.h"
++#ifdef __aarch64__
++#include <Hypervisor/Hypervisor.h>
++#else
+ #include <Hypervisor/hv.h>
++#endif
+ 
+ /* hvf_slot flags */
+ #define HVF_SLOT_LOG (1 << 0)
+@@ -44,7 +49,8 @@ struct HVFState {
+ extern HVFState *hvf_state;
+ 
+ struct hvf_vcpu_state {
+-    int fd;
++    uint64_t fd;
++    void *exit;
+ };
+ 
+ void assert_hvf_ok(hv_return_t ret);
+@@ -54,5 +60,6 @@ int hvf_arch_init_vcpu(CPUState *cpu);
+ void hvf_arch_vcpu_destroy(CPUState *cpu);
+ int hvf_vcpu_exec(CPUState *cpu);
+ hvf_slot *hvf_find_overlap_slot(uint64_t, uint64_t);
++void hvf_kick_vcpu_thread(CPUState *cpu);
+ 
+ #endif
+diff --git a/target/arm/hvf/hvf.c b/target/arm/hvf/hvf.c
+new file mode 100644
+index 00000000000..8f18efe8567
+--- /dev/null
++++ b/target/arm/hvf/hvf.c
+@@ -0,0 +1,618 @@
++/*
++ * QEMU Hypervisor.framework support for Apple Silicon
++
++ * Copyright 2020 Alexander Graf <agraf@csgraf.de>
++ *
++ * This work is licensed under the terms of the GNU GPL, version 2 or later.
++ * See the COPYING file in the top-level directory.
++ *
++ */
++
++#include "qemu/osdep.h"
++#include "qemu-common.h"
++#include "qemu/error-report.h"
++
++#include "sysemu/runstate.h"
++#include "sysemu/hvf.h"
++#include "sysemu/hvf_int.h"
++#include "sysemu/hw_accel.h"
++
++#include "exec/address-spaces.h"
++#include "hw/irq.h"
++#include "qemu/main-loop.h"
++#include "sysemu/accel.h"
++#include "sysemu/cpus.h"
++#include "target/arm/cpu.h"
++#include "target/arm/internals.h"
++
++#define HVF_DEBUG 0
++#define DPRINTF(...)                                        \
++    if (HVF_DEBUG) {                                        \
++        fprintf(stderr, "HVF %s:%d ", __func__, __LINE__);  \
++        fprintf(stderr, __VA_ARGS__);                       \
++        fprintf(stderr, "\n");                              \
++    }
++
++#define HVF_SYSREG(crn, crm, op0, op1, op2) \
++        ENCODE_AA64_CP_REG(CP_REG_ARM64_SYSREG_CP, crn, crm, op0, op1, op2)
++#define PL1_WRITE_MASK 0x4
++
++#define SYSREG(op0, op1, crn, crm, op2) \
++    ((op0 << 20) | (op2 << 17) | (op1 << 14) | (crn << 10) | (crm << 1))
++#define SYSREG_MASK           SYSREG(0x3, 0x7, 0xf, 0xf, 0x7)
++#define SYSREG_CNTPCT_EL0     SYSREG(3, 3, 14, 0, 1)
++#define SYSREG_PMCCNTR_EL0    SYSREG(3, 3, 9, 13, 0)
++
++#define WFX_IS_WFE (1 << 0)
++
++struct hvf_reg_match {
++    int reg;
++    uint64_t offset;
++};
++
++static const struct hvf_reg_match hvf_reg_match[] = {
++    { HV_REG_X0,   offsetof(CPUARMState, xregs[0]) },
++    { HV_REG_X1,   offsetof(CPUARMState, xregs[1]) },
++    { HV_REG_X2,   offsetof(CPUARMState, xregs[2]) },
++    { HV_REG_X3,   offsetof(CPUARMState, xregs[3]) },
++    { HV_REG_X4,   offsetof(CPUARMState, xregs[4]) },
++    { HV_REG_X5,   offsetof(CPUARMState, xregs[5]) },
++    { HV_REG_X6,   offsetof(CPUARMState, xregs[6]) },
++    { HV_REG_X7,   offsetof(CPUARMState, xregs[7]) },
++    { HV_REG_X8,   offsetof(CPUARMState, xregs[8]) },
++    { HV_REG_X9,   offsetof(CPUARMState, xregs[9]) },
++    { HV_REG_X10,  offsetof(CPUARMState, xregs[10]) },
++    { HV_REG_X11,  offsetof(CPUARMState, xregs[11]) },
++    { HV_REG_X12,  offsetof(CPUARMState, xregs[12]) },
++    { HV_REG_X13,  offsetof(CPUARMState, xregs[13]) },
++    { HV_REG_X14,  offsetof(CPUARMState, xregs[14]) },
++    { HV_REG_X15,  offsetof(CPUARMState, xregs[15]) },
++    { HV_REG_X16,  offsetof(CPUARMState, xregs[16]) },
++    { HV_REG_X17,  offsetof(CPUARMState, xregs[17]) },
++    { HV_REG_X18,  offsetof(CPUARMState, xregs[18]) },
++    { HV_REG_X19,  offsetof(CPUARMState, xregs[19]) },
++    { HV_REG_X20,  offsetof(CPUARMState, xregs[20]) },
++    { HV_REG_X21,  offsetof(CPUARMState, xregs[21]) },
++    { HV_REG_X22,  offsetof(CPUARMState, xregs[22]) },
++    { HV_REG_X23,  offsetof(CPUARMState, xregs[23]) },
++    { HV_REG_X24,  offsetof(CPUARMState, xregs[24]) },
++    { HV_REG_X25,  offsetof(CPUARMState, xregs[25]) },
++    { HV_REG_X26,  offsetof(CPUARMState, xregs[26]) },
++    { HV_REG_X27,  offsetof(CPUARMState, xregs[27]) },
++    { HV_REG_X28,  offsetof(CPUARMState, xregs[28]) },
++    { HV_REG_X29,  offsetof(CPUARMState, xregs[29]) },
++    { HV_REG_X30,  offsetof(CPUARMState, xregs[30]) },
++    { HV_REG_PC,   offsetof(CPUARMState, pc) },
++};
++
++struct hvf_sreg_match {
++    int reg;
++    uint32_t key;
++};
++
++static const struct hvf_sreg_match hvf_sreg_match[] = {
++    { HV_SYS_REG_DBGBVR0_EL1, HVF_SYSREG(0, 0, 14, 0, 4) },
++    { HV_SYS_REG_DBGBCR0_EL1, HVF_SYSREG(0, 0, 14, 0, 5) },
++    { HV_SYS_REG_DBGWVR0_EL1, HVF_SYSREG(0, 0, 14, 0, 6) },
++    { HV_SYS_REG_DBGWCR0_EL1, HVF_SYSREG(0, 0, 14, 0, 7) },
++
++    { HV_SYS_REG_DBGBVR1_EL1, HVF_SYSREG(0, 1, 14, 0, 4) },
++    { HV_SYS_REG_DBGBCR1_EL1, HVF_SYSREG(0, 1, 14, 0, 5) },
++    { HV_SYS_REG_DBGWVR1_EL1, HVF_SYSREG(0, 1, 14, 0, 6) },
++    { HV_SYS_REG_DBGWCR1_EL1, HVF_SYSREG(0, 1, 14, 0, 7) },
++
++    { HV_SYS_REG_DBGBVR2_EL1, HVF_SYSREG(0, 2, 14, 0, 4) },
++    { HV_SYS_REG_DBGBCR2_EL1, HVF_SYSREG(0, 2, 14, 0, 5) },
++    { HV_SYS_REG_DBGWVR2_EL1, HVF_SYSREG(0, 2, 14, 0, 6) },
++    { HV_SYS_REG_DBGWCR2_EL1, HVF_SYSREG(0, 2, 14, 0, 7) },
++
++    { HV_SYS_REG_DBGBVR3_EL1, HVF_SYSREG(0, 3, 14, 0, 4) },
++    { HV_SYS_REG_DBGBCR3_EL1, HVF_SYSREG(0, 3, 14, 0, 5) },
++    { HV_SYS_REG_DBGWVR3_EL1, HVF_SYSREG(0, 3, 14, 0, 6) },
++    { HV_SYS_REG_DBGWCR3_EL1, HVF_SYSREG(0, 3, 14, 0, 7) },
++
++    { HV_SYS_REG_DBGBVR4_EL1, HVF_SYSREG(0, 4, 14, 0, 4) },
++    { HV_SYS_REG_DBGBCR4_EL1, HVF_SYSREG(0, 4, 14, 0, 5) },
++    { HV_SYS_REG_DBGWVR4_EL1, HVF_SYSREG(0, 4, 14, 0, 6) },
++    { HV_SYS_REG_DBGWCR4_EL1, HVF_SYSREG(0, 4, 14, 0, 7) },
++
++    { HV_SYS_REG_DBGBVR5_EL1, HVF_SYSREG(0, 5, 14, 0, 4) },
++    { HV_SYS_REG_DBGBCR5_EL1, HVF_SYSREG(0, 5, 14, 0, 5) },
++    { HV_SYS_REG_DBGWVR5_EL1, HVF_SYSREG(0, 5, 14, 0, 6) },
++    { HV_SYS_REG_DBGWCR5_EL1, HVF_SYSREG(0, 5, 14, 0, 7) },
++
++    { HV_SYS_REG_DBGBVR6_EL1, HVF_SYSREG(0, 6, 14, 0, 4) },
++    { HV_SYS_REG_DBGBCR6_EL1, HVF_SYSREG(0, 6, 14, 0, 5) },
++    { HV_SYS_REG_DBGWVR6_EL1, HVF_SYSREG(0, 6, 14, 0, 6) },
++    { HV_SYS_REG_DBGWCR6_EL1, HVF_SYSREG(0, 6, 14, 0, 7) },
++
++    { HV_SYS_REG_DBGBVR7_EL1, HVF_SYSREG(0, 7, 14, 0, 4) },
++    { HV_SYS_REG_DBGBCR7_EL1, HVF_SYSREG(0, 7, 14, 0, 5) },
++    { HV_SYS_REG_DBGWVR7_EL1, HVF_SYSREG(0, 7, 14, 0, 6) },
++    { HV_SYS_REG_DBGWCR7_EL1, HVF_SYSREG(0, 7, 14, 0, 7) },
++
++    { HV_SYS_REG_DBGBVR8_EL1, HVF_SYSREG(0, 8, 14, 0, 4) },
++    { HV_SYS_REG_DBGBCR8_EL1, HVF_SYSREG(0, 8, 14, 0, 5) },
++    { HV_SYS_REG_DBGWVR8_EL1, HVF_SYSREG(0, 8, 14, 0, 6) },
++    { HV_SYS_REG_DBGWCR8_EL1, HVF_SYSREG(0, 8, 14, 0, 7) },
++
++    { HV_SYS_REG_DBGBVR9_EL1, HVF_SYSREG(0, 9, 14, 0, 4) },
++    { HV_SYS_REG_DBGBCR9_EL1, HVF_SYSREG(0, 9, 14, 0, 5) },
++    { HV_SYS_REG_DBGWVR9_EL1, HVF_SYSREG(0, 9, 14, 0, 6) },
++    { HV_SYS_REG_DBGWCR9_EL1, HVF_SYSREG(0, 9, 14, 0, 7) },
++
++    { HV_SYS_REG_DBGBVR10_EL1, HVF_SYSREG(0, 10, 14, 0, 4) },
++    { HV_SYS_REG_DBGBCR10_EL1, HVF_SYSREG(0, 10, 14, 0, 5) },
++    { HV_SYS_REG_DBGWVR10_EL1, HVF_SYSREG(0, 10, 14, 0, 6) },
++    { HV_SYS_REG_DBGWCR10_EL1, HVF_SYSREG(0, 10, 14, 0, 7) },
++
++    { HV_SYS_REG_DBGBVR11_EL1, HVF_SYSREG(0, 11, 14, 0, 4) },
++    { HV_SYS_REG_DBGBCR11_EL1, HVF_SYSREG(0, 11, 14, 0, 5) },
++    { HV_SYS_REG_DBGWVR11_EL1, HVF_SYSREG(0, 11, 14, 0, 6) },
++    { HV_SYS_REG_DBGWCR11_EL1, HVF_SYSREG(0, 11, 14, 0, 7) },
++
++    { HV_SYS_REG_DBGBVR12_EL1, HVF_SYSREG(0, 12, 14, 0, 4) },
++    { HV_SYS_REG_DBGBCR12_EL1, HVF_SYSREG(0, 12, 14, 0, 5) },
++    { HV_SYS_REG_DBGWVR12_EL1, HVF_SYSREG(0, 12, 14, 0, 6) },
++    { HV_SYS_REG_DBGWCR12_EL1, HVF_SYSREG(0, 12, 14, 0, 7) },
++
++    { HV_SYS_REG_DBGBVR13_EL1, HVF_SYSREG(0, 13, 14, 0, 4) },
++    { HV_SYS_REG_DBGBCR13_EL1, HVF_SYSREG(0, 13, 14, 0, 5) },
++    { HV_SYS_REG_DBGWVR13_EL1, HVF_SYSREG(0, 13, 14, 0, 6) },
++    { HV_SYS_REG_DBGWCR13_EL1, HVF_SYSREG(0, 13, 14, 0, 7) },
++
++    { HV_SYS_REG_DBGBVR14_EL1, HVF_SYSREG(0, 14, 14, 0, 4) },
++    { HV_SYS_REG_DBGBCR14_EL1, HVF_SYSREG(0, 14, 14, 0, 5) },
++    { HV_SYS_REG_DBGWVR14_EL1, HVF_SYSREG(0, 14, 14, 0, 6) },
++    { HV_SYS_REG_DBGWCR14_EL1, HVF_SYSREG(0, 14, 14, 0, 7) },
++
++    { HV_SYS_REG_DBGBVR15_EL1, HVF_SYSREG(0, 15, 14, 0, 4) },
++    { HV_SYS_REG_DBGBCR15_EL1, HVF_SYSREG(0, 15, 14, 0, 5) },
++    { HV_SYS_REG_DBGWVR15_EL1, HVF_SYSREG(0, 15, 14, 0, 6) },
++    { HV_SYS_REG_DBGWCR15_EL1, HVF_SYSREG(0, 15, 14, 0, 7) },
++
++#ifdef SYNC_NO_RAW_REGS
++    /*
++     * The registers below are manually synced on init because they are
++     * marked as NO_RAW. We still list them to make number space sync easier.
++     */
++    { HV_SYS_REG_MDCCINT_EL1, HVF_SYSREG(0, 2, 2, 0, 0) },
++    { HV_SYS_REG_MIDR_EL1, HVF_SYSREG(0, 0, 3, 0, 0) },
++    { HV_SYS_REG_MPIDR_EL1, HVF_SYSREG(0, 0, 3, 0, 5) },
++    { HV_SYS_REG_ID_AA64PFR0_EL1, HVF_SYSREG(0, 4, 3, 0, 0) },
++#endif
++    { HV_SYS_REG_ID_AA64PFR1_EL1, HVF_SYSREG(0, 4, 3, 0, 2) },
++    { HV_SYS_REG_ID_AA64DFR0_EL1, HVF_SYSREG(0, 5, 3, 0, 0) },
++    { HV_SYS_REG_ID_AA64DFR1_EL1, HVF_SYSREG(0, 5, 3, 0, 1) },
++    { HV_SYS_REG_ID_AA64ISAR0_EL1, HVF_SYSREG(0, 6, 3, 0, 0) },
++    { HV_SYS_REG_ID_AA64ISAR1_EL1, HVF_SYSREG(0, 6, 3, 0, 1) },
++#ifdef SYNC_NO_MMFR0
++    /* We keep the hardware MMFR0 around. HW limits are there anyway */
++    { HV_SYS_REG_ID_AA64MMFR0_EL1, HVF_SYSREG(0, 7, 3, 0, 0) },
++#endif
++    { HV_SYS_REG_ID_AA64MMFR1_EL1, HVF_SYSREG(0, 7, 3, 0, 1) },
++    { HV_SYS_REG_ID_AA64MMFR2_EL1, HVF_SYSREG(0, 7, 3, 0, 2) },
++
++    { HV_SYS_REG_MDSCR_EL1, HVF_SYSREG(0, 2, 2, 0, 2) },
++    { HV_SYS_REG_SCTLR_EL1, HVF_SYSREG(1, 0, 3, 0, 0) },
++    { HV_SYS_REG_CPACR_EL1, HVF_SYSREG(1, 0, 3, 0, 2) },
++    { HV_SYS_REG_TTBR0_EL1, HVF_SYSREG(2, 0, 3, 0, 0) },
++    { HV_SYS_REG_TTBR1_EL1, HVF_SYSREG(2, 0, 3, 0, 1) },
++    { HV_SYS_REG_TCR_EL1, HVF_SYSREG(2, 0, 3, 0, 2) },
++
++    { HV_SYS_REG_APIAKEYLO_EL1, HVF_SYSREG(2, 1, 3, 0, 0) },
++    { HV_SYS_REG_APIAKEYHI_EL1, HVF_SYSREG(2, 1, 3, 0, 1) },
++    { HV_SYS_REG_APIBKEYLO_EL1, HVF_SYSREG(2, 1, 3, 0, 2) },
++    { HV_SYS_REG_APIBKEYHI_EL1, HVF_SYSREG(2, 1, 3, 0, 3) },
++    { HV_SYS_REG_APDAKEYLO_EL1, HVF_SYSREG(2, 2, 3, 0, 0) },
++    { HV_SYS_REG_APDAKEYHI_EL1, HVF_SYSREG(2, 2, 3, 0, 1) },
++    { HV_SYS_REG_APDBKEYLO_EL1, HVF_SYSREG(2, 2, 3, 0, 2) },
++    { HV_SYS_REG_APDBKEYHI_EL1, HVF_SYSREG(2, 2, 3, 0, 3) },
++    { HV_SYS_REG_APGAKEYLO_EL1, HVF_SYSREG(2, 3, 3, 0, 0) },
++    { HV_SYS_REG_APGAKEYHI_EL1, HVF_SYSREG(2, 3, 3, 0, 1) },
++
++    { HV_SYS_REG_SPSR_EL1, HVF_SYSREG(4, 0, 3, 1, 0) },
++    { HV_SYS_REG_ELR_EL1, HVF_SYSREG(4, 0, 3, 0, 1) },
++    { HV_SYS_REG_SP_EL0, HVF_SYSREG(4, 1, 3, 0, 0) },
++    { HV_SYS_REG_AFSR0_EL1, HVF_SYSREG(5, 1, 3, 0, 0) },
++    { HV_SYS_REG_AFSR1_EL1, HVF_SYSREG(5, 1, 3, 0, 1) },
++    { HV_SYS_REG_ESR_EL1, HVF_SYSREG(5, 2, 3, 0, 0) },
++    { HV_SYS_REG_FAR_EL1, HVF_SYSREG(6, 0, 3, 0, 0) },
++    { HV_SYS_REG_PAR_EL1, HVF_SYSREG(7, 4, 3, 0, 0) },
++    { HV_SYS_REG_MAIR_EL1, HVF_SYSREG(10, 2, 3, 0, 0) },
++    { HV_SYS_REG_AMAIR_EL1, HVF_SYSREG(10, 3, 3, 0, 0) },
++    { HV_SYS_REG_VBAR_EL1, HVF_SYSREG(12, 0, 3, 0, 0) },
++    { HV_SYS_REG_CONTEXTIDR_EL1, HVF_SYSREG(13, 0, 3, 0, 1) },
++    { HV_SYS_REG_TPIDR_EL1, HVF_SYSREG(13, 0, 3, 0, 4) },
++    { HV_SYS_REG_CNTKCTL_EL1, HVF_SYSREG(14, 1, 3, 0, 0) },
++    { HV_SYS_REG_CSSELR_EL1, HVF_SYSREG(0, 0, 3, 2, 0) },
++    { HV_SYS_REG_TPIDR_EL0, HVF_SYSREG(13, 0, 3, 3, 2) },
++    { HV_SYS_REG_TPIDRRO_EL0, HVF_SYSREG(13, 0, 3, 3, 3) },
++    { HV_SYS_REG_CNTV_CTL_EL0, HVF_SYSREG(14, 3, 3, 3, 1) },
++    { HV_SYS_REG_CNTV_CVAL_EL0, HVF_SYSREG(14, 3, 3, 3, 2) },
++    { HV_SYS_REG_SP_EL1, HVF_SYSREG(4, 1, 3, 4, 0) },
++};
++
++int hvf_get_registers(CPUState *cpu)
++{
++    ARMCPU *arm_cpu = ARM_CPU(cpu);
++    CPUARMState *env = &arm_cpu->env;
++    hv_return_t ret;
++    uint64_t val;
++    int i;
++
++    for (i = 0; i < ARRAY_SIZE(hvf_reg_match); i++) {
++        ret = hv_vcpu_get_reg(cpu->hvf->fd, hvf_reg_match[i].reg, &val);
++        *(uint64_t *)((void *)env + hvf_reg_match[i].offset) = val;
++        assert_hvf_ok(ret);
++    }
++
++    val = 0;
++    ret = hv_vcpu_get_reg(cpu->hvf->fd, HV_REG_FPCR, &val);
++    assert_hvf_ok(ret);
++    vfp_set_fpcr(env, val);
++
++    val = 0;
++    ret = hv_vcpu_get_reg(cpu->hvf->fd, HV_REG_FPSR, &val);
++    assert_hvf_ok(ret);
++    vfp_set_fpsr(env, val);
++
++    ret = hv_vcpu_get_reg(cpu->hvf->fd, HV_REG_CPSR, &val);
++    assert_hvf_ok(ret);
++    pstate_write(env, val);
++
++    for (i = 0; i < ARRAY_SIZE(hvf_sreg_match); i++) {
++        ret = hv_vcpu_get_sys_reg(cpu->hvf->fd, hvf_sreg_match[i].reg, &val);
++        assert_hvf_ok(ret);
++
++        arm_cpu->cpreg_values[i] = val;
++    }
++    write_list_to_cpustate(arm_cpu);
++
++    return 0;
++}
++
++int hvf_put_registers(CPUState *cpu)
++{
++    ARMCPU *arm_cpu = ARM_CPU(cpu);
++    CPUARMState *env = &arm_cpu->env;
++    hv_return_t ret;
++    uint64_t val;
++    int i;
++
++    for (i = 0; i < ARRAY_SIZE(hvf_reg_match); i++) {
++        val = *(uint64_t *)((void *)env + hvf_reg_match[i].offset);
++        ret = hv_vcpu_set_reg(cpu->hvf->fd, hvf_reg_match[i].reg, val);
++
++        assert_hvf_ok(ret);
++    }
++
++    ret = hv_vcpu_set_reg(cpu->hvf->fd, HV_REG_FPCR, vfp_get_fpcr(env));
++    assert_hvf_ok(ret);
++
++    ret = hv_vcpu_set_reg(cpu->hvf->fd, HV_REG_FPSR, vfp_get_fpsr(env));
++    assert_hvf_ok(ret);
++
++    ret = hv_vcpu_set_reg(cpu->hvf->fd, HV_REG_CPSR, pstate_read(env));
++    assert_hvf_ok(ret);
++
++    write_cpustate_to_list(arm_cpu, false);
++    for (i = 0; i < ARRAY_SIZE(hvf_sreg_match); i++) {
++        val = arm_cpu->cpreg_values[i];
++        ret = hv_vcpu_set_sys_reg(cpu->hvf->fd, hvf_sreg_match[i].reg, val);
++        assert_hvf_ok(ret);
++    }
++
++    return 0;
++}
++
++static void flush_cpu_state(CPUState *cpu)
++{
++    if (cpu->vcpu_dirty) {
++        hvf_put_registers(cpu);
++        cpu->vcpu_dirty = false;
++    }
++}
++
++static void hvf_set_reg(CPUState *cpu, int rt, uint64_t val)
++{
++    hv_return_t r;
++
++    flush_cpu_state(cpu);
++
++    if (rt < 31) {
++        r = hv_vcpu_set_reg(cpu->hvf->fd, HV_REG_X0 + rt, val);
++        assert_hvf_ok(r);
++    }
++}
++
++static uint64_t hvf_get_reg(CPUState *cpu, int rt)
++{
++    uint64_t val = 0;
++    hv_return_t r;
++
++    flush_cpu_state(cpu);
++
++    if (rt < 31) {
++        r = hv_vcpu_get_reg(cpu->hvf->fd, HV_REG_X0 + rt, &val);
++        assert_hvf_ok(r);
++    }
++
++    return val;
++}
++
++void hvf_arch_vcpu_destroy(CPUState *cpu)
++{
++}
++
++int hvf_arch_init_vcpu(CPUState *cpu)
++{
++    ARMCPU *arm_cpu = ARM_CPU(cpu);
++    CPUARMState *env = &arm_cpu->env;
++    uint32_t sregs_match_len = ARRAY_SIZE(hvf_sreg_match);
++    uint64_t pfr;
++    hv_return_t ret;
++    int i;
++
++    env->aarch64 = 1;
++    asm volatile("mrs %0, cntfrq_el0" : "=r"(arm_cpu->gt_cntfrq_hz));
++
++    /* Allocate enough space for our sysreg sync */
++    arm_cpu->cpreg_indexes = g_renew(uint64_t, arm_cpu->cpreg_indexes,
++                                     sregs_match_len);
++    arm_cpu->cpreg_values = g_renew(uint64_t, arm_cpu->cpreg_values,
++                                    sregs_match_len);
++    arm_cpu->cpreg_vmstate_indexes = g_renew(uint64_t,
++                                             arm_cpu->cpreg_vmstate_indexes,
++                                             sregs_match_len);
++    arm_cpu->cpreg_vmstate_values = g_renew(uint64_t,
++                                            arm_cpu->cpreg_vmstate_values,
++                                            sregs_match_len);
++
++    memset(arm_cpu->cpreg_values, 0, sregs_match_len * sizeof(uint64_t));
++    arm_cpu->cpreg_array_len = sregs_match_len;
++    arm_cpu->cpreg_vmstate_array_len = sregs_match_len;
++
++    /* Populate cp list for all known sysregs */
++    for (i = 0; i < sregs_match_len; i++) {
++        const ARMCPRegInfo *ri;
++
++        arm_cpu->cpreg_indexes[i] = cpreg_to_kvm_id(hvf_sreg_match[i].key);
++
++        ri = get_arm_cp_reginfo(arm_cpu->cp_regs, hvf_sreg_match[i].key);
++        if (ri) {
++            assert(!(ri->type & ARM_CP_NO_RAW));
++        }
++    }
++    write_cpustate_to_list(arm_cpu, false);
++
++    /* Set CP_NO_RAW system registers on init */
++    ret = hv_vcpu_set_sys_reg(cpu->hvf->fd, HV_SYS_REG_MIDR_EL1,
++                              arm_cpu->midr);
++    assert_hvf_ok(ret);
++
++    ret = hv_vcpu_set_sys_reg(cpu->hvf->fd, HV_SYS_REG_MPIDR_EL1,
++                              arm_cpu->mp_affinity);
++    assert_hvf_ok(ret);
++
++    ret = hv_vcpu_get_sys_reg(cpu->hvf->fd, HV_SYS_REG_ID_AA64PFR0_EL1, &pfr);
++    assert_hvf_ok(ret);
++    pfr |= env->gicv3state ? (1 << 24) : 0;
++    ret = hv_vcpu_set_sys_reg(cpu->hvf->fd, HV_SYS_REG_ID_AA64PFR0_EL1, pfr);
++    assert_hvf_ok(ret);
++
++    /* We're limited to underlying hardware caps, override internal versions */
++    ret = hv_vcpu_get_sys_reg(cpu->hvf->fd, HV_SYS_REG_ID_AA64MMFR0_EL1,
++                              &arm_cpu->isar.id_aa64mmfr0);
++    assert_hvf_ok(ret);
++
++    return 0;
++}
++
++void hvf_kick_vcpu_thread(CPUState *cpu)
++{
++    hv_vcpus_exit(&cpu->hvf->fd, 1);
++}
++
++static uint64_t hvf_sysreg_read(CPUState *cpu, uint32_t reg)
++{
++    ARMCPU *arm_cpu = ARM_CPU(cpu);
++    uint64_t val = 0;
++
++    switch (reg) {
++    case SYSREG_CNTPCT_EL0:
++        val = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) /
++              gt_cntfrq_period_ns(arm_cpu);
++        break;
++    case SYSREG_PMCCNTR_EL0:
++        val = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++        break;
++    default:
++        DPRINTF("unhandled sysreg read %08x (op0=%d op1=%d op2=%d "
++                "crn=%d crm=%d)", reg, (reg >> 20) & 0x3,
++                (reg >> 14) & 0x7, (reg >> 17) & 0x7,
++                (reg >> 10) & 0xf, (reg >> 1) & 0xf);
++        break;
++    }
++
++    return val;
++}
++
++static void hvf_sysreg_write(CPUState *cpu, uint32_t reg, uint64_t val)
++{
++    ARMCPU *arm_cpu = ARM_CPU(cpu);
++
++    switch (reg) {
++    case SYSREG_CNTPCT_EL0:
++        break;
++    default:
++        DPRINTF("unhandled sysreg write %08x", reg);
++        break;
++    }
++}
++
++static int hvf_inject_interrupts(CPUState *cpu)
++{
++    if (cpu->interrupt_request & CPU_INTERRUPT_FIQ) {
++        DPRINTF("injecting FIQ");
++        hv_vcpu_set_pending_interrupt(cpu->hvf->fd, HV_INTERRUPT_TYPE_FIQ, true);
++    }
++
++    if (cpu->interrupt_request & CPU_INTERRUPT_HARD) {
++        DPRINTF("injecting IRQ");
++        hv_vcpu_set_pending_interrupt(cpu->hvf->fd, HV_INTERRUPT_TYPE_IRQ, true);
++    }
++
++    return 0;
++}
++
++int hvf_vcpu_exec(CPUState *cpu)
++{
++    ARMCPU *arm_cpu = ARM_CPU(cpu);
++    CPUARMState *env = &arm_cpu->env;
++    hv_vcpu_exit_t *hvf_exit = cpu->hvf->exit;
++    hv_return_t r;
++
++    while (1) {
++        bool advance_pc = false;
++
++        qemu_wait_io_event_common(cpu);
++        flush_cpu_state(cpu);
++
++        if (hvf_inject_interrupts(cpu)) {
++            return EXCP_INTERRUPT;
++        }
++
++        if (cpu->halted) {
++            return EXCP_HLT;
++        }
++
++        qemu_mutex_unlock_iothread();
++        assert_hvf_ok(hv_vcpu_run(cpu->hvf->fd));
++
++        /* handle VMEXIT */
++        uint64_t exit_reason = hvf_exit->reason;
++        uint64_t syndrome = hvf_exit->exception.syndrome;
++        uint32_t ec = syn_get_ec(syndrome);
++
++        qemu_mutex_lock_iothread();
++        switch (exit_reason) {
++        case HV_EXIT_REASON_EXCEPTION:
++            /* This is the main one, handle below. */
++            break;
++        case HV_EXIT_REASON_VTIMER_ACTIVATED:
++            qemu_set_irq(arm_cpu->gt_timer_outputs[GTIMER_VIRT], 1);
++            continue;
++        case HV_EXIT_REASON_CANCELED:
++            /* we got kicked, no exit to process */
++            continue;
++        default:
++            assert(0);
++        }
++
++        switch (ec) {
++        case EC_DATAABORT: {
++            bool isv = syndrome & ARM_EL_ISV;
++            bool iswrite = (syndrome >> 6) & 1;
++            bool s1ptw = (syndrome >> 7) & 1;
++            uint32_t sas = (syndrome >> 22) & 3;
++            uint32_t len = 1 << sas;
++            uint32_t srt = (syndrome >> 16) & 0x1f;
++            uint64_t val = 0;
++
++            DPRINTF("data abort: [pc=0x%llx va=0x%016llx pa=0x%016llx isv=%x "
++                    "iswrite=%x s1ptw=%x len=%d srt=%d]\n",
++                    env->pc, hvf_exit->exception.virtual_address,
++                    hvf_exit->exception.physical_address, isv, iswrite,
++                    s1ptw, len, srt);
++
++            assert(isv);
++
++            if (iswrite) {
++                val = hvf_get_reg(cpu, srt);
++                address_space_write(&address_space_memory,
++                                    hvf_exit->exception.physical_address,
++                                    MEMTXATTRS_UNSPECIFIED, &val, len);
++
++                /*
++                 * We do not have a callback to see if the timer is out of
++                 * pending state. That means every MMIO write could
++                 * potentially be an EOI ends the vtimer. Until we get an
++                 * actual callback, let's just see if the timer is still
++                 * pending on every possible toggle point.
++                 */
++                qemu_set_irq(arm_cpu->gt_timer_outputs[GTIMER_VIRT], 0);
++                hv_vcpu_set_vtimer_mask(cpu->hvf->fd, false);
++            } else {
++                address_space_read(&address_space_memory,
++                                   hvf_exit->exception.physical_address,
++                                   MEMTXATTRS_UNSPECIFIED, &val, len);
++                hvf_set_reg(cpu, srt, val);
++            }
++
++            advance_pc = true;
++            break;
++        }
++        case EC_SYSTEMREGISTERTRAP: {
++            bool isread = (syndrome >> 0) & 1;
++            uint32_t rt = (syndrome >> 5) & 0x1f;
++            uint32_t reg = syndrome & SYSREG_MASK;
++            uint64_t val = 0;
++
++            DPRINTF("sysreg %s operation reg=%08x (op0=%d op1=%d op2=%d "
++                    "crn=%d crm=%d)", (isread) ? "read" : "write",
++                    reg, (reg >> 20) & 0x3,
++                    (reg >> 14) & 0x7, (reg >> 17) & 0x7,
++                    (reg >> 10) & 0xf, (reg >> 1) & 0xf);
++
++            if (isread) {
++                hvf_set_reg(cpu, rt, hvf_sysreg_read(cpu, reg));
++            } else {
++                val = hvf_get_reg(cpu, rt);
++                hvf_sysreg_write(cpu, reg, val);
++            }
++
++            advance_pc = true;
++            break;
++        }
++        case EC_WFX_TRAP:
++            advance_pc = true;
++            break;
++        case EC_AA64_HVC:
++            cpu_synchronize_state(cpu);
++            if (arm_is_psci_call(arm_cpu, EXCP_HVC)) {
++                arm_handle_psci_call(arm_cpu);
++            } else {
++                DPRINTF("unknown HVC! %016llx", env->xregs[0]);
++                env->xregs[0] = -1;
++            }
++            break;
++        case EC_AA64_SMC:
++            cpu_synchronize_state(cpu);
++            if (arm_is_psci_call(arm_cpu, EXCP_SMC)) {
++                arm_handle_psci_call(arm_cpu);
++            } else {
++                DPRINTF("unknown SMC! %016llx", env->xregs[0]);
++                env->xregs[0] = -1;
++            }
++            env->pc += 4;
++            break;
++        default:
++            cpu_synchronize_state(cpu);
++            DPRINTF("exit: %llx [ec=0x%x pc=0x%llx]", syndrome, ec, env->pc);
++            error_report("%llx: unhandled exit %llx", env->pc, exit_reason);
++        }
++
++        if (advance_pc) {
++            uint64_t pc;
++
++            flush_cpu_state(cpu);
++
++            r = hv_vcpu_get_reg(cpu->hvf->fd, HV_REG_PC, &pc);
++            assert_hvf_ok(r);
++            pc += 4;
++            r = hv_vcpu_set_reg(cpu->hvf->fd, HV_REG_PC, pc);
++            assert_hvf_ok(r);
++        }
++    }
++}
+
+From fc85d11f7a02f299db22fe8c28d54bec6ceeda19 Mon Sep 17 00:00:00 2001
+From: Alexander Graf <agraf@csgraf.de>
+Date: Wed, 20 Jan 2021 23:44:41 +0100
+Subject: [PATCH 08/11] arm: Add Hypervisor.framework build target
+
+Now that we have all logic in place that we need to handle Hypervisor.framework
+on Apple Silicon systems, let's add CONFIG_HVF for aarch64 as well so that we
+can build it.
+
+Signed-off-by: Alexander Graf <agraf@csgraf.de>
+Reviewed-by: Roman Bolshakov <r.bolshakov@yadro.com>
+Tested-by: Roman Bolshakov <r.bolshakov@yadro.com> (x86 only)
+
+Message-Id: <20210120224444.71840-9-agraf@csgraf.de>
+---
+ meson.build                | 11 ++++++++++-
+ target/arm/hvf/meson.build |  3 +++
+ target/arm/meson.build     |  2 ++
+ 3 files changed, 15 insertions(+), 1 deletion(-)
+ create mode 100644 target/arm/hvf/meson.build
+
+diff --git a/meson.build b/meson.build
+index 15181e450c9..e1eaf75a98b 100644
+--- a/meson.build
++++ b/meson.build
+@@ -74,16 +74,25 @@ else
+ endif
+ 
+ accelerator_targets = { 'CONFIG_KVM': kvm_targets }
++
++if cpu in ['x86', 'x86_64']
++  hvf_targets = ['x86_64-softmmu']
++elif cpu in ['aarch64']
++  hvf_targets = ['aarch64-softmmu']
++else
++  hvf_targets = []
++endif
++
+ if cpu in ['x86', 'x86_64', 'arm', 'aarch64']
+   # i368 emulator provides xenpv machine type for multiple architectures
+   accelerator_targets += {
+     'CONFIG_XEN': ['i386-softmmu', 'x86_64-softmmu'],
++    'CONFIG_HVF': hvf_targets,
+   }
+ endif
+ if cpu in ['x86', 'x86_64']
+   accelerator_targets += {
+     'CONFIG_HAX': ['i386-softmmu', 'x86_64-softmmu'],
+-    'CONFIG_HVF': ['x86_64-softmmu'],
+     'CONFIG_WHPX': ['i386-softmmu', 'x86_64-softmmu'],
+   }
+ endif
+diff --git a/target/arm/hvf/meson.build b/target/arm/hvf/meson.build
+new file mode 100644
+index 00000000000..855e6cce5ab
+--- /dev/null
++++ b/target/arm/hvf/meson.build
+@@ -0,0 +1,3 @@
++arm_softmmu_ss.add(when: [hvf, 'CONFIG_HVF'], if_true: files(
++  'hvf.c',
++))
+diff --git a/target/arm/meson.build b/target/arm/meson.build
+index 15b936c1010..2efd6e672a4 100644
+--- a/target/arm/meson.build
++++ b/target/arm/meson.build
+@@ -54,5 +54,7 @@ arm_softmmu_ss.add(files(
+   'psci.c',
+ ))
+ 
++subdir('hvf')
++
+ target_arch += {'arm': arm_ss}
+ target_softmmu_arch += {'arm': arm_softmmu_ss}
+
+From f3bde9c53fa1c4709483339998f2a23f0257ceed Mon Sep 17 00:00:00 2001
+From: Peter Collingbourne <pcc@google.com>
+Date: Wed, 20 Jan 2021 23:44:42 +0100
+Subject: [PATCH 09/11] arm/hvf: Add a WFI handler
+
+Sleep on WFI until the VTIMER is due but allow ourselves to be woken
+up on IPI.
+
+In this implementation IPI is blocked on the CPU thread at startup and
+pselect() is used to atomically unblock the signal and begin sleeping.
+The signal is sent unconditionally so there's no need to worry about
+races between actually sleeping and the "we think we're sleeping"
+state. It may lead to an extra wakeup but that's better than missing
+it entirely.
+
+Signed-off-by: Peter Collingbourne <pcc@google.com>
+[agraf: Remove unused 'set' variable, always advance PC on WFX trap]
+Signed-off-by: Alexander Graf <agraf@csgraf.de>
+Acked-by: Roman Bolshakov <r.bolshakov@yadro.com>
+Message-Id: <20210120224444.71840-10-agraf@csgraf.de>
+---
+ accel/hvf/hvf-cpus.c     |  5 ++--
+ include/sysemu/hvf_int.h |  1 +
+ target/arm/hvf/hvf.c     | 56 ++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 59 insertions(+), 3 deletions(-)
+
+diff --git a/accel/hvf/hvf-cpus.c b/accel/hvf/hvf-cpus.c
+index 6d70ee742e0..abef6a58f7b 100644
+--- a/accel/hvf/hvf-cpus.c
++++ b/accel/hvf/hvf-cpus.c
+@@ -322,15 +322,14 @@ static int hvf_init_vcpu(CPUState *cpu)
+     cpu->hvf = g_malloc0(sizeof(*cpu->hvf));
+ 
+     /* init cpu signals */
+-    sigset_t set;
+     struct sigaction sigact;
+ 
+     memset(&sigact, 0, sizeof(sigact));
+     sigact.sa_handler = dummy_signal;
+     sigaction(SIG_IPI, &sigact, NULL);
+ 
+-    pthread_sigmask(SIG_BLOCK, NULL, &set);
+-    sigdelset(&set, SIG_IPI);
++    pthread_sigmask(SIG_BLOCK, NULL, &cpu->hvf->unblock_ipi_mask);
++    sigdelset(&cpu->hvf->unblock_ipi_mask, SIG_IPI);
+ 
+ #ifdef __aarch64__
+     r = hv_vcpu_create(&cpu->hvf->fd, (hv_vcpu_exit_t **)&cpu->hvf->exit, NULL);
+diff --git a/include/sysemu/hvf_int.h b/include/sysemu/hvf_int.h
+index c2ac6c8f975..7a397fe85a0 100644
+--- a/include/sysemu/hvf_int.h
++++ b/include/sysemu/hvf_int.h
+@@ -51,6 +51,7 @@ extern HVFState *hvf_state;
+ struct hvf_vcpu_state {
+     uint64_t fd;
+     void *exit;
++    sigset_t unblock_ipi_mask;
+ };
+ 
+ void assert_hvf_ok(hv_return_t ret);
+diff --git a/target/arm/hvf/hvf.c b/target/arm/hvf/hvf.c
+index 8f18efe8567..f0850ab14ab 100644
+--- a/target/arm/hvf/hvf.c
++++ b/target/arm/hvf/hvf.c
+@@ -2,6 +2,7 @@
+  * QEMU Hypervisor.framework support for Apple Silicon
+ 
+  * Copyright 2020 Alexander Graf <agraf@csgraf.de>
++ * Copyright 2020 Google LLC
+  *
+  * This work is licensed under the terms of the GNU GPL, version 2 or later.
+  * See the COPYING file in the top-level directory.
+@@ -17,6 +18,8 @@
+ #include "sysemu/hvf_int.h"
+ #include "sysemu/hw_accel.h"
+ 
++#include <mach/mach_time.h>
++
+ #include "exec/address-spaces.h"
+ #include "hw/irq.h"
+ #include "qemu/main-loop.h"
+@@ -411,6 +414,7 @@ int hvf_arch_init_vcpu(CPUState *cpu)
+ 
+ void hvf_kick_vcpu_thread(CPUState *cpu)
+ {
++    cpus_kick_thread(cpu);
+     hv_vcpus_exit(&cpu->hvf->fd, 1);
+ }
+ 
+@@ -466,6 +470,18 @@ static int hvf_inject_interrupts(CPUState *cpu)
+     return 0;
+ }
+ 
++static void hvf_wait_for_ipi(CPUState *cpu, struct timespec *ts)
++{
++    /*
++     * Use pselect to sleep so that other threads can IPI us while we're
++     * sleeping.
++     */
++    qatomic_mb_set(&cpu->thread_kicked, false);
++    qemu_mutex_unlock_iothread();
++    pselect(0, 0, 0, 0, ts, &cpu->hvf->unblock_ipi_mask);
++    qemu_mutex_lock_iothread();
++}
++
+ int hvf_vcpu_exec(CPUState *cpu)
+ {
+     ARMCPU *arm_cpu = ARM_CPU(cpu);
+@@ -577,6 +593,46 @@ int hvf_vcpu_exec(CPUState *cpu)
+         }
+         case EC_WFX_TRAP:
+             advance_pc = true;
++            if (!(syndrome & WFX_IS_WFE) && !(cpu->interrupt_request &
++                (CPU_INTERRUPT_HARD | CPU_INTERRUPT_FIQ))) {
++
++                uint64_t ctl;
++                r = hv_vcpu_get_sys_reg(cpu->hvf->fd, HV_SYS_REG_CNTV_CTL_EL0,
++                                        &ctl);
++                assert_hvf_ok(r);
++
++                if (!(ctl & 1) || (ctl & 2)) {
++                    /* Timer disabled or masked, just wait for an IPI. */
++                    hvf_wait_for_ipi(cpu, NULL);
++                    break;
++                }
++
++                uint64_t cval;
++                r = hv_vcpu_get_sys_reg(cpu->hvf->fd, HV_SYS_REG_CNTV_CVAL_EL0,
++                                        &cval);
++                assert_hvf_ok(r);
++
++                int64_t ticks_to_sleep = cval - mach_absolute_time();
++                if (ticks_to_sleep < 0) {
++                    break;
++                }
++
++                uint64_t seconds = ticks_to_sleep / arm_cpu->gt_cntfrq_hz;
++                uint64_t nanos =
++                    (ticks_to_sleep - arm_cpu->gt_cntfrq_hz * seconds) *
++                    1000000000 / arm_cpu->gt_cntfrq_hz;
++
++                /*
++                 * Don't sleep for less than 2ms. This is believed to improve
++                 * latency of message passing workloads.
++                 */
++                if (!seconds && nanos < 2000000) {
++                    break;
++                }
++
++                struct timespec ts = { seconds, nanos };
++                hvf_wait_for_ipi(cpu, &ts);
++            }
+             break;
+         case EC_AA64_HVC:
+             cpu_synchronize_state(cpu);
+
+From 9b94d99579fd6ed1b3b024d550420d184840ae0c Mon Sep 17 00:00:00 2001
+From: Alexander Graf <agraf@csgraf.de>
+Date: Wed, 20 Jan 2021 23:44:43 +0100
+Subject: [PATCH 10/11] hvf: arm: Add support for GICv3
+
+We currently only support GICv2 emulation. To also support GICv3, we will
+need to pass a few system registers into their respective handler functions.
+
+This patch adds handling for all of the required system registers, so that
+we can run with more than 8 vCPUs.
+
+Signed-off-by: Alexander Graf <agraf@csgraf.de>
+Acked-by: Roman Bolshakov <r.bolshakov@yadro.com>
+
+Message-Id: <20210120224444.71840-11-agraf@csgraf.de>
+---
+ target/arm/hvf/hvf.c | 141 +++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 141 insertions(+)
+
+diff --git a/target/arm/hvf/hvf.c b/target/arm/hvf/hvf.c
+index f0850ab14ab..98bd6712c0c 100644
+--- a/target/arm/hvf/hvf.c
++++ b/target/arm/hvf/hvf.c
+@@ -22,6 +22,7 @@
+ 
+ #include "exec/address-spaces.h"
+ #include "hw/irq.h"
++#include "hw/intc/gicv3_internal.h"
+ #include "qemu/main-loop.h"
+ #include "sysemu/accel.h"
+ #include "sysemu/cpus.h"
+@@ -46,6 +47,33 @@
+ #define SYSREG_CNTPCT_EL0     SYSREG(3, 3, 14, 0, 1)
+ #define SYSREG_PMCCNTR_EL0    SYSREG(3, 3, 9, 13, 0)
+ 
++#define SYSREG_ICC_AP0R0_EL1     SYSREG(3, 0, 12, 8, 4)
++#define SYSREG_ICC_AP0R1_EL1     SYSREG(3, 0, 12, 8, 5)
++#define SYSREG_ICC_AP0R2_EL1     SYSREG(3, 0, 12, 8, 6)
++#define SYSREG_ICC_AP0R3_EL1     SYSREG(3, 0, 12, 8, 7)
++#define SYSREG_ICC_AP1R0_EL1     SYSREG(3, 0, 12, 9, 0)
++#define SYSREG_ICC_AP1R1_EL1     SYSREG(3, 0, 12, 9, 1)
++#define SYSREG_ICC_AP1R2_EL1     SYSREG(3, 0, 12, 9, 2)
++#define SYSREG_ICC_AP1R3_EL1     SYSREG(3, 0, 12, 9, 3)
++#define SYSREG_ICC_ASGI1R_EL1    SYSREG(3, 0, 12, 11, 6)
++#define SYSREG_ICC_BPR0_EL1      SYSREG(3, 0, 12, 8, 3)
++#define SYSREG_ICC_BPR1_EL1      SYSREG(3, 0, 12, 12, 3)
++#define SYSREG_ICC_CTLR_EL1      SYSREG(3, 0, 12, 12, 4)
++#define SYSREG_ICC_DIR_EL1       SYSREG(3, 0, 12, 11, 1)
++#define SYSREG_ICC_EOIR0_EL1     SYSREG(3, 0, 12, 8, 1)
++#define SYSREG_ICC_EOIR1_EL1     SYSREG(3, 0, 12, 12, 1)
++#define SYSREG_ICC_HPPIR0_EL1    SYSREG(3, 0, 12, 8, 2)
++#define SYSREG_ICC_HPPIR1_EL1    SYSREG(3, 0, 12, 12, 2)
++#define SYSREG_ICC_IAR0_EL1      SYSREG(3, 0, 12, 8, 0)
++#define SYSREG_ICC_IAR1_EL1      SYSREG(3, 0, 12, 12, 0)
++#define SYSREG_ICC_IGRPEN0_EL1   SYSREG(3, 0, 12, 12, 6)
++#define SYSREG_ICC_IGRPEN1_EL1   SYSREG(3, 0, 12, 12, 7)
++#define SYSREG_ICC_PMR_EL1       SYSREG(3, 0, 4, 6, 0)
++#define SYSREG_ICC_RPR_EL1       SYSREG(3, 0, 12, 11, 3)
++#define SYSREG_ICC_SGI0R_EL1     SYSREG(3, 0, 12, 11, 7)
++#define SYSREG_ICC_SGI1R_EL1     SYSREG(3, 0, 12, 11, 5)
++#define SYSREG_ICC_SRE_EL1       SYSREG(3, 0, 12, 12, 5)
++
+ #define WFX_IS_WFE (1 << 0)
+ 
+ struct hvf_reg_match {
+@@ -418,6 +446,38 @@ void hvf_kick_vcpu_thread(CPUState *cpu)
+     hv_vcpus_exit(&cpu->hvf->fd, 1);
+ }
+ 
++static uint32_t hvf_reg2cp_reg(uint32_t reg)
++{
++    return ENCODE_AA64_CP_REG(CP_REG_ARM64_SYSREG_CP,
++                              (reg >> 10) & 0xf,
++                              (reg >> 1) & 0xf,
++                              (reg >> 20) & 0x3,
++                              (reg >> 14) & 0x7,
++                              (reg >> 17) & 0x7);
++}
++
++static uint64_t hvf_sysreg_read_cp(CPUState *cpu, uint32_t reg)
++{
++    ARMCPU *arm_cpu = ARM_CPU(cpu);
++    CPUARMState *env = &arm_cpu->env;
++    const ARMCPRegInfo *ri;
++    uint64_t val = 0;
++
++    ri = get_arm_cp_reginfo(arm_cpu->cp_regs, hvf_reg2cp_reg(reg));
++    if (ri) {
++        if (ri->type & ARM_CP_CONST) {
++            val = ri->resetvalue;
++        } else if (ri->readfn) {
++            val = ri->readfn(env, ri);
++        } else {
++            val = CPREG_FIELD64(env, ri);
++        }
++        DPRINTF("vgic read from %s [val=%016llx]", ri->name, val);
++    }
++
++    return val;
++}
++
+ static uint64_t hvf_sysreg_read(CPUState *cpu, uint32_t reg)
+ {
+     ARMCPU *arm_cpu = ARM_CPU(cpu);
+@@ -431,6 +491,39 @@ static uint64_t hvf_sysreg_read(CPUState *cpu, uint32_t reg)
+     case SYSREG_PMCCNTR_EL0:
+         val = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+         break;
++    case SYSREG_ICC_AP0R0_EL1:
++    case SYSREG_ICC_AP0R1_EL1:
++    case SYSREG_ICC_AP0R2_EL1:
++    case SYSREG_ICC_AP0R3_EL1:
++    case SYSREG_ICC_AP1R0_EL1:
++    case SYSREG_ICC_AP1R1_EL1:
++    case SYSREG_ICC_AP1R2_EL1:
++    case SYSREG_ICC_AP1R3_EL1:
++    case SYSREG_ICC_ASGI1R_EL1:
++    case SYSREG_ICC_BPR0_EL1:
++    case SYSREG_ICC_BPR1_EL1:
++    case SYSREG_ICC_DIR_EL1:
++    case SYSREG_ICC_EOIR0_EL1:
++    case SYSREG_ICC_EOIR1_EL1:
++    case SYSREG_ICC_HPPIR0_EL1:
++    case SYSREG_ICC_HPPIR1_EL1:
++    case SYSREG_ICC_IAR0_EL1:
++    case SYSREG_ICC_IAR1_EL1:
++    case SYSREG_ICC_IGRPEN0_EL1:
++    case SYSREG_ICC_IGRPEN1_EL1:
++    case SYSREG_ICC_PMR_EL1:
++    case SYSREG_ICC_SGI0R_EL1:
++    case SYSREG_ICC_SGI1R_EL1:
++    case SYSREG_ICC_SRE_EL1:
++        val = hvf_sysreg_read_cp(cpu, reg);
++        break;
++    case SYSREG_ICC_CTLR_EL1:
++        val = hvf_sysreg_read_cp(cpu, reg);
++
++        /* AP0R registers above 0 don't trap, expose less PRIs to fit */
++        val &= ~ICC_CTLR_EL1_PRIBITS_MASK;
++        val |= 4 << ICC_CTLR_EL1_PRIBITS_SHIFT;
++        break;
+     default:
+         DPRINTF("unhandled sysreg read %08x (op0=%d op1=%d op2=%d "
+                 "crn=%d crm=%d)", reg, (reg >> 20) & 0x3,
+@@ -442,6 +535,24 @@ static uint64_t hvf_sysreg_read(CPUState *cpu, uint32_t reg)
+     return val;
+ }
+ 
++static void hvf_sysreg_write_cp(CPUState *cpu, uint32_t reg, uint64_t val)
++{
++    ARMCPU *arm_cpu = ARM_CPU(cpu);
++    CPUARMState *env = &arm_cpu->env;
++    const ARMCPRegInfo *ri;
++
++    ri = get_arm_cp_reginfo(arm_cpu->cp_regs, hvf_reg2cp_reg(reg));
++
++    if (ri) {
++        if (ri->writefn) {
++            ri->writefn(env, ri, val);
++        } else {
++            CPREG_FIELD64(env, ri) = val;
++        }
++        DPRINTF("vgic write to %s [val=%016llx]", ri->name, val);
++    }
++}
++
+ static void hvf_sysreg_write(CPUState *cpu, uint32_t reg, uint64_t val)
+ {
+     ARMCPU *arm_cpu = ARM_CPU(cpu);
+@@ -449,6 +560,36 @@ static void hvf_sysreg_write(CPUState *cpu, uint32_t reg, uint64_t val)
+     switch (reg) {
+     case SYSREG_CNTPCT_EL0:
+         break;
++    case SYSREG_ICC_AP0R0_EL1:
++    case SYSREG_ICC_AP0R1_EL1:
++    case SYSREG_ICC_AP0R2_EL1:
++    case SYSREG_ICC_AP0R3_EL1:
++    case SYSREG_ICC_AP1R0_EL1:
++    case SYSREG_ICC_AP1R1_EL1:
++    case SYSREG_ICC_AP1R2_EL1:
++    case SYSREG_ICC_AP1R3_EL1:
++    case SYSREG_ICC_ASGI1R_EL1:
++    case SYSREG_ICC_BPR0_EL1:
++    case SYSREG_ICC_BPR1_EL1:
++    case SYSREG_ICC_CTLR_EL1:
++    case SYSREG_ICC_DIR_EL1:
++    case SYSREG_ICC_HPPIR0_EL1:
++    case SYSREG_ICC_HPPIR1_EL1:
++    case SYSREG_ICC_IAR0_EL1:
++    case SYSREG_ICC_IAR1_EL1:
++    case SYSREG_ICC_IGRPEN0_EL1:
++    case SYSREG_ICC_IGRPEN1_EL1:
++    case SYSREG_ICC_PMR_EL1:
++    case SYSREG_ICC_SGI0R_EL1:
++    case SYSREG_ICC_SGI1R_EL1:
++    case SYSREG_ICC_SRE_EL1:
++        hvf_sysreg_write_cp(cpu, reg, val);
++        break;
++    case SYSREG_ICC_EOIR0_EL1:
++    case SYSREG_ICC_EOIR1_EL1:
++        hvf_sysreg_write_cp(cpu, reg, val);
++        qemu_set_irq(arm_cpu->gt_timer_outputs[GTIMER_VIRT], 0);
++        hv_vcpu_set_vtimer_mask(cpu->hvf->fd, false);
+     default:
+         DPRINTF("unhandled sysreg write %08x", reg);
+         break;
+
+From 6beb290807bd0efb25f091bd9d35560c38d4159d Mon Sep 17 00:00:00 2001
+From: Alexander Graf <agraf@csgraf.de>
+Date: Wed, 20 Jan 2021 23:44:44 +0100
+Subject: [PATCH 11/11] hvf: arm: Implement -cpu host
+
+Now that we have working system register sync, we push more target CPU
+properties into the virtual machine. That might be useful in some
+situations, but is not the typical case that users want.
+
+So let's add a -cpu host option that allows them to explicitly pass all
+CPU capabilities of their host CPU into the guest.
+
+Signed-off-by: Alexander Graf <agraf@csgraf.de>
+Acked-by: Roman Bolshakov <r.bolshakov@yadro.com>
+Message-Id: <20210120224444.71840-12-agraf@csgraf.de>
+---
+ include/sysemu/hvf.h |  2 ++
+ target/arm/cpu.c     |  9 ++++++---
+ target/arm/cpu.h     |  2 ++
+ target/arm/hvf/hvf.c | 41 +++++++++++++++++++++++++++++++++++++++++
+ target/arm/kvm_arm.h |  2 --
+ 5 files changed, 51 insertions(+), 5 deletions(-)
+
+diff --git a/include/sysemu/hvf.h b/include/sysemu/hvf.h
+index f893768df95..7eb61cf0941 100644
+--- a/include/sysemu/hvf.h
++++ b/include/sysemu/hvf.h
+@@ -19,6 +19,8 @@
+ #ifdef CONFIG_HVF
+ uint32_t hvf_get_supported_cpuid(uint32_t func, uint32_t idx,
+                                  int reg);
++struct ARMCPU;
++void hvf_arm_set_cpu_features_from_host(struct ARMCPU *cpu);
+ extern bool hvf_allowed;
+ #define hvf_enabled() (hvf_allowed)
+ #else /* !CONFIG_HVF */
+diff --git a/target/arm/cpu.c b/target/arm/cpu.c
+index f1929b5ebae..abd129d23fe 100644
+--- a/target/arm/cpu.c
++++ b/target/arm/cpu.c
+@@ -2288,12 +2288,16 @@ static void arm_cpu_class_init(ObjectClass *oc, void *data)
+ #endif
+ }
+ 
+-#ifdef CONFIG_KVM
++#if defined(CONFIG_KVM) || defined(CONFIG_HVF)
+ static void arm_host_initfn(Object *obj)
+ {
+     ARMCPU *cpu = ARM_CPU(obj);
+ 
++#ifdef CONFIG_KVM
+     kvm_arm_set_cpu_features_from_host(cpu);
++#else
++    hvf_arm_set_cpu_features_from_host(cpu);
++#endif
+     if (arm_feature(&cpu->env, ARM_FEATURE_AARCH64)) {
+         aarch64_add_sve_properties(obj);
+     }
+@@ -2305,7 +2309,6 @@ static const TypeInfo host_arm_cpu_type_info = {
+     .parent = TYPE_AARCH64_CPU,
+     .instance_init = arm_host_initfn,
+ };
+-
+ #endif
+ 
+ static void arm_cpu_instance_init(Object *obj)
+@@ -2364,7 +2367,7 @@ static void arm_cpu_register_types(void)
+ 
+     type_register_static(&arm_cpu_type_info);
+ 
+-#ifdef CONFIG_KVM
++#if defined(CONFIG_KVM) || defined(CONFIG_HVF)
+     type_register_static(&host_arm_cpu_type_info);
+ #endif
+ 
+diff --git a/target/arm/cpu.h b/target/arm/cpu.h
+index df0d6778330..5cc59df451e 100644
+--- a/target/arm/cpu.h
++++ b/target/arm/cpu.h
+@@ -2961,6 +2961,8 @@ bool write_cpustate_to_list(ARMCPU *cpu, bool kvm_sync);
+ #define ARM_CPU_TYPE_NAME(name) (name ARM_CPU_TYPE_SUFFIX)
+ #define CPU_RESOLVING_TYPE TYPE_ARM_CPU
+ 
++#define TYPE_ARM_HOST_CPU "host-" TYPE_ARM_CPU
++
+ #define cpu_signal_handler cpu_arm_signal_handler
+ #define cpu_list arm_cpu_list
+ 
+diff --git a/target/arm/hvf/hvf.c b/target/arm/hvf/hvf.c
+index 98bd6712c0c..42dcc23ba0e 100644
+--- a/target/arm/hvf/hvf.c
++++ b/target/arm/hvf/hvf.c
+@@ -372,6 +372,47 @@ static uint64_t hvf_get_reg(CPUState *cpu, int rt)
+     return val;
+ }
+ 
++void hvf_arm_set_cpu_features_from_host(ARMCPU *cpu)
++{
++    ARMISARegisters host_isar;
++    const struct isar_regs {
++        int reg;
++        uint64_t *val;
++    } regs[] = {
++        { HV_SYS_REG_ID_AA64PFR0_EL1, &host_isar.id_aa64pfr0 },
++        { HV_SYS_REG_ID_AA64PFR1_EL1, &host_isar.id_aa64pfr1 },
++        { HV_SYS_REG_ID_AA64DFR0_EL1, &host_isar.id_aa64dfr0 },
++        { HV_SYS_REG_ID_AA64DFR1_EL1, &host_isar.id_aa64dfr1 },
++        { HV_SYS_REG_ID_AA64ISAR0_EL1, &host_isar.id_aa64isar0 },
++        { HV_SYS_REG_ID_AA64ISAR1_EL1, &host_isar.id_aa64isar1 },
++        { HV_SYS_REG_ID_AA64MMFR0_EL1, &host_isar.id_aa64mmfr0 },
++        { HV_SYS_REG_ID_AA64MMFR1_EL1, &host_isar.id_aa64mmfr1 },
++        { HV_SYS_REG_ID_AA64MMFR2_EL1, &host_isar.id_aa64mmfr2 },
++    };
++    hv_vcpu_t fd;
++    hv_vcpu_exit_t *exit;
++    int i;
++
++    cpu->dtb_compatible = "arm,arm-v8";
++    cpu->env.features = (1ULL << ARM_FEATURE_V8) |
++                        (1ULL << ARM_FEATURE_NEON) |
++                        (1ULL << ARM_FEATURE_AARCH64) |
++                        (1ULL << ARM_FEATURE_PMU) |
++                        (1ULL << ARM_FEATURE_GENERIC_TIMER);
++
++    /* We set up a small vcpu to extract host registers */
++
++    assert_hvf_ok(hv_vcpu_create(&fd, &exit, NULL));
++    for (i = 0; i < ARRAY_SIZE(regs); i++) {
++        assert_hvf_ok(hv_vcpu_get_sys_reg(fd, regs[i].reg, regs[i].val));
++    }
++    assert_hvf_ok(hv_vcpu_get_sys_reg(fd, HV_SYS_REG_MIDR_EL1, &cpu->midr));
++    assert_hvf_ok(hv_vcpu_destroy(fd));
++
++    cpu->isar = host_isar;
++    cpu->reset_sctlr = 0x00c50078;
++}
++
+ void hvf_arch_vcpu_destroy(CPUState *cpu)
+ {
+ }
+diff --git a/target/arm/kvm_arm.h b/target/arm/kvm_arm.h
+index eb81b7059eb..081727a37e5 100644
+--- a/target/arm/kvm_arm.h
++++ b/target/arm/kvm_arm.h
+@@ -214,8 +214,6 @@ bool kvm_arm_create_scratch_host_vcpu(const uint32_t *cpus_to_try,
+  */
+ void kvm_arm_destroy_scratch_host_vcpu(int *fdarray);
+ 
+-#define TYPE_ARM_HOST_CPU "host-" TYPE_ARM_CPU
+-
+ /**
+  * ARMHostCPUFeatures: information about the host CPU (identified
+  * by asking the host kernel)
