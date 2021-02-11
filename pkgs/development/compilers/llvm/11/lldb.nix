@@ -22,7 +22,7 @@ stdenv.mkDerivation (rec {
 
   src = fetch pname "1yzjbsn81l2r3v9js2fxrglkwvz1f2rxyxh6430nydbrs0bqklz8";
 
-  patches = [ ./lldb-procfs.patch ];
+  patches = [ ./lldb-procfs.patch ./lldb-11.0.1-fallout-fix.patch ];
 
   nativeBuildInputs = [ cmake python3 which swig lit ]
     ++ lib.optionals enableManpages [ python3.pkgs.sphinx python3.pkgs.recommonmark ];
