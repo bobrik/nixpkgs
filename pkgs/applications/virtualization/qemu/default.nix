@@ -84,6 +84,7 @@ stdenv.mkDerivation rec {
   patches = [
     ./fix-qemu-ga.patch
     ./9p-ignore-noatime.patch
+    ./hvf.patch
   ] ++ optional nixosTestRunner ./force-uid0-on-9p.patch
     ++ optionals stdenv.hostPlatform.isMusl [
     (fetchpatch {
@@ -112,6 +113,8 @@ stdenv.mkDerivation rec {
       --replace "'VERSION'" "'QEMU_VERSION'"
   '' + optionalString stdenv.hostPlatform.isMusl ''
     NIX_CFLAGS_COMPILE+=" -D_LINUX_SYSINFO_H"
+  '' + optionalString stdenv.isDarwin ''
+    substituteInPlace scripts/entitlement.sh --replace "codesign" "# no codesign"
   '';
 
   configureFlags =
