@@ -33,6 +33,8 @@ stdenv.mkDerivation rec {
 
   outputs = [ "out" "man" "pause" ];
 
+  patches = [ ./aarch64-darwin.patch ];
+
   postPatch = ''
     # go env breaks the sandbox
     substituteInPlace "hack/lib/golang.sh" \
