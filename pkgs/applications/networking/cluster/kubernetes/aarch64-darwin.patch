@@ -1,0 +1,108 @@
+From d6f7e3c4180a93a6d65cc74d479baf583ff97362 Mon Sep 17 00:00:00 2001
+From: Davanum Srinivas <davanum@gmail.com>
+Date: Fri, 22 Jan 2021 21:25:50 +0000
+Subject: [PATCH] Support M1 MacBooks darwin/arm64 on the client-side
+
+testing using:
+```
+build/run.sh make generated_files && make quick-release-images
+```
+
+Signed-off-by: Davanum Srinivas <davanum@gmail.com>
+---
+ build/build-image/Dockerfile |  3 ++-
+ hack/lib/golang.sh           | 22 ++++++++++++++--------
+ test/typecheck/main.go       |  8 ++++----
+ 3 files changed, 20 insertions(+), 13 deletions(-)
+
+diff --git a/build/build-image/Dockerfile b/build/build-image/Dockerfile
+index 64e2c4f9cf4c0..74ec2041f3f7e 100644
+--- a/build/build-image/Dockerfile
++++ b/build/build-image/Dockerfile
+@@ -13,7 +13,8 @@
+ # limitations under the License.
+ 
+ # This file creates a standard build environment for building Kubernetes
+-FROM k8s.gcr.io/build-image/kube-cross:KUBE_BUILD_IMAGE_CROSS_TAG
++#FROM k8s.gcr.io/build-image/kube-cross:KUBE_BUILD_IMAGE_CROSS_TAG
++FROM gcr.io/kubernetes-development-244305/kube-cross-arm64:v1.15.5-1
+ 
+ # Mark this as a kube-build container
+ RUN touch /kube-build-image
+diff --git a/hack/lib/golang.sh b/hack/lib/golang.sh
+index bef1d837703e2..a925fc34bded1 100755
+--- a/hack/lib/golang.sh
++++ b/hack/lib/golang.sh
+@@ -49,6 +49,7 @@ readonly KUBE_SUPPORTED_CLIENT_PLATFORMS=(
+   linux/s390x
+   linux/ppc64le
+   darwin/amd64
++  darwin/arm64
+   windows/amd64
+   windows/386
+ )
+@@ -62,6 +63,7 @@ readonly KUBE_SUPPORTED_TEST_PLATFORMS=(
+   linux/s390x
+   linux/ppc64le
+   darwin/amd64
++  darwin/arm64
+   windows/amd64
+ )
+ 
+@@ -206,25 +208,29 @@ kube::golang::setup_platforms() {
+     readonly KUBE_CLIENT_PLATFORMS
+ 
+   elif [[ "${KUBE_FASTBUILD:-}" == "true" ]]; then
+-    KUBE_SERVER_PLATFORMS=(linux/amd64)
++    host_arch=$(kube::util::host_arch)
++    if [[ "${host_arch}" != "amd64" && "${host_arch}" != "arm64" ]]; then
++      host_arch="amd64"
++    fi
++    KUBE_SERVER_PLATFORMS=(linux/${host_arch})
+     readonly KUBE_SERVER_PLATFORMS
+-    KUBE_NODE_PLATFORMS=(linux/amd64)
++    KUBE_NODE_PLATFORMS=(linux/${host_arch})
+     readonly KUBE_NODE_PLATFORMS
+     if [[ "${KUBE_BUILDER_OS:-}" == "darwin"* ]]; then
+       KUBE_TEST_PLATFORMS=(
+-        darwin/amd64
+-        linux/amd64
++        darwin/${host_arch}
++        linux/${host_arch}
+       )
+       readonly KUBE_TEST_PLATFORMS
+       KUBE_CLIENT_PLATFORMS=(
+-        darwin/amd64
+-        linux/amd64
++        darwin/${host_arch}
++        linux/${host_arch}
+       )
+       readonly KUBE_CLIENT_PLATFORMS
+     else
+-      KUBE_TEST_PLATFORMS=(linux/amd64)
++      KUBE_TEST_PLATFORMS=(linux/${host_arch})
+       readonly KUBE_TEST_PLATFORMS
+-      KUBE_CLIENT_PLATFORMS=(linux/amd64)
++      KUBE_CLIENT_PLATFORMS=(linux/${host_arch})
+       readonly KUBE_CLIENT_PLATFORMS
+     fi
+   else
+diff --git a/test/typecheck/main.go b/test/typecheck/main.go
+index ffe5085b0d5af..bd02895b747c1 100644
+--- a/test/typecheck/main.go
++++ b/test/typecheck/main.go
+@@ -48,10 +48,10 @@ var (
+ 	// interesting OS-based errors happen earlier.
+ 	crossPlatforms = []string{
+ 		"linux/amd64", "windows/386",
+-		"darwin/amd64", "linux/arm",
+-		"linux/386", "windows/amd64",
+-		"linux/arm64", "linux/ppc64le",
+-		"linux/s390x",
++		"darwin/amd64", "darwin/arm64",
++		"linux/arm", "linux/386",
++		"windows/amd64", "linux/arm64",
++		"linux/ppc64le", "linux/s390x",
+ 	}
+ 
+ 	// directories we always ignore
