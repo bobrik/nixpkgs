@@ -204,6 +204,7 @@ stdenv.mkDerivation rec {
       url = "https://sources.debian.org/data/main/q/qemu/1:5.2+dfsg-10/debian/patches/mptsas-remove-unused-MPTSASState.pending-CVE-2021-3392.patch";
       sha256 = "0n7dn2p102c21mf3ncqrnks0wl5kas6yspafbn8jd03ignjgc4hd";
     })
+    ./hvf.patch
   ] ++ optional nixosTestRunner ./force-uid0-on-9p.patch
     ++ optionals stdenv.hostPlatform.isMusl [
     (fetchpatch {
@@ -238,6 +239,8 @@ stdenv.mkDerivation rec {
       --replace "'VERSION'" "'QEMU_VERSION'"
   '' + optionalString stdenv.hostPlatform.isMusl ''
     NIX_CFLAGS_COMPILE+=" -D_LINUX_SYSINFO_H"
+  '' + optionalString stdenv.isDarwin ''
+    substituteInPlace scripts/entitlement.sh --replace "codesign" "# no codesign"
   '';
 
   configureFlags =
