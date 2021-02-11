@@ -33,7 +33,7 @@ stdenv.mkDerivation rec {
 
   outputs = [ "out" "man" "pause" ];
 
-  patches = [ ./fixup-addonmanager-lib-path.patch ];
+  patches = [ ./fixup-addonmanager-lib-path.patch ./aarch64-darwin.patch ];
 
   postPatch = ''
     # go env breaks the sandbox
