@@ -32,8 +32,8 @@ stdenv.mkDerivation rec {
   cmakeFlags = [
     "-DBUILD_SHARED_LIBS=ON"
     "-DENABLE_TESTS=OFF"
-  ] ++ lib.optionals stdenv.isDarwin [
-    "-DCONFIG_RUNTIME_CPU_DETECT=OFF"
+  ] ++ lib.optionals (stdenv.isDarwin && stdenv.isAarch64) [
+    "-DCONFIG_RUNTIME_CPU_DETECT=0"
   ];
 
   postFixup = ''
