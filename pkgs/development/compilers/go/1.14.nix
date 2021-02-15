@@ -12,7 +12,16 @@ let
   inherit (lib) optionals optionalString;
 
   go_bootstrap = callPackage ./bootstrap.nix {
-    inherit Security;
+    version = "1.13.15"; # Using prior version
+    hashes = {
+      # Use `print-hashes.sh ${version}` to generate the list below
+      darwin-amd64 = "63180e32e9b7bfcd0c1c056e7c215299f662a1098a30316599c7b3e2e2fa28e7";
+      linux-arm64 = "a5c59e3f0aeaf6e939790152a8bfabb91d70c9787afb7aee06aef9bd4411c551";
+      linux-armv6l = "c58eacae1745769e77328aec08e0e3b4da1b4e99e1153046b1b00ae0b3338d42";
+      linux-amd64 = "01cc3ddf6273900eba3e2bf311238828b7168b822bb57a9ccab4d7aa2acd6028";
+      linux-386 = "1a63e97b6f1a673966d6a4f4f7f9c724fdd68bdeac11425bf8a39c7a24ddc0a7";
+      linux-ppc64le = "bee55510a87bd366381df0be4736fd5cc89523228f9ca20eb1687f59e80ca029";
+    };
   };
 
   goBootstrap = runCommand "go-bootstrap" {} ''
