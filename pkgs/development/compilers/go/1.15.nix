@@ -12,9 +12,10 @@ let
   inherit (lib) optionals optionalString;
 
   go_bootstrap = callPackage ./bootstrap.nix {
-    version = "1.14.15"; # Using prior version
+    version = if stdenv.isDarwin && stdenv.isAarch64 then "1.16rc1" else "1.14.15"; # Using prior version
     hashes = {
       # Use `print-hashes.sh ${version}` to generate the list below
+      darwin-arm64 = "f5e0fe8eddac93c79fc12c0d067fd7d119ec20facedb95029706f402334e34dd";
       darwin-amd64 = "cc116e7522d1d1bcb606ce413555c4f2d5c86c0c8d5e5074a0d57b303d8edb50";
       linux-arm64 = "4d964166a189c22032521c63935437c304bb7f01673b196898cff525897a1c27";
       linux-armv6l = "a63960d9b9c14954e299ffe060c0574ffb91ab810837da5941853b664d0652da";
