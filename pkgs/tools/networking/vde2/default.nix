@@ -22,6 +22,11 @@ stdenv.mkDerivation rec {
     })
   ];
 
+  # It doesn't recognize 11, so we have to do this.
+  preConfigure = lib.optionalString (lib.versionAtLeast stdenv.hostPlatform.darwinMinVersion "11") ''
+    MACOSX_DEPLOYMENT_TARGET=10.16
+  '';
+
   configureFlags = lib.optional (!withPython) "--disable-python";
 
   buildInputs = [ openssl libpcap ]

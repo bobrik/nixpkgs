@@ -11,6 +11,11 @@ stdenv.mkDerivation rec {
     sha256 = "0b98359hd8mm585sh145ss828pg2y8vgz38lqrb7nypapiyqdnd1";
   };
 
+  # It doesn't recognize 11, so we have to do this.
+  preConfigure = lib.optionalString (lib.versionAtLeast stdenv.hostPlatform.darwinMinVersion "11") ''
+    MACOSX_DEPLOYMENT_TARGET=10.16
+  '';
+
   patches = lib.optional stdenv.isDarwin [ ./bsm-add-audit_token_to_pid.patch ];
 
   configureFlags = [ "ac_cv_file__usr_include_mach_audit_triggers_defs=no" ];
