@@ -30,6 +30,11 @@ stdenv.mkDerivation rec {
     "CC=${stdenv.cc.targetPrefix}cc"
   ];
 
+  # It doesn't recognize 11, so we have to do this.
+  preConfigure = lib.optionalString (lib.versionAtLeast stdenv.hostPlatform.darwinMinVersion "11") ''
+    MACOSX_DEPLOYMENT_TARGET=10.16
+  '';
+
   configureFlags = [
     "--enable-overlays"
     "--disable-dependency-tracking"   # speeds up one-time build
