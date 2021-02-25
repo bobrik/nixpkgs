@@ -7149,7 +7149,6 @@ in
 
   pinentry_mac = callPackage ../tools/security/pinentry/mac.nix {
     inherit (darwin.apple_sdk.frameworks) Cocoa;
-    xcbuildHook = xcbuild6Hook;
   };
 
   pingtcp = callPackage ../tools/networking/pingtcp { };
