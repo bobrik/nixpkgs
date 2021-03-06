@@ -10306,7 +10306,8 @@ in
     else ../development/compilers/gcc/10);
   gcc = if (with stdenv.targetPlatform; isVc4 || libc == "relibc")
     then gcc6 else
-      if stdenv.targetPlatform.isAarch64 then gcc9 else gcc10;
+      # aarch64-darwin doesn't support earlier gcc
+      if (stdenv.targetPlatform.isAarch64 && !stdenv.isDarwin) then gcc9 else gcc11;
   gcc-unwrapped = gcc.cc;
 
   wrapNonDeterministicGcc = stdenv: ccWrapper:
@@ -10537,7 +10538,8 @@ in
 
   gcc_latest = gcc11;
 
-  gfortran = gfortran9;
+  # aarch64-darwin doesn't support earlier gcc
+  gfortran = if (stdenv.isDarwin && stdenv.isAarch64) then gfortran11 else gfortran9;
 
   gfortran48 = wrapCC (gcc48.cc.override {
     name = "gfortran";
@@ -10625,7 +10627,8 @@ in
     inherit (gnome2) libart_lgpl;
   });
 
-  gnat = gnat9;
+  # aarch64-darwin doesn't support earlier gcc
+  gnat = if (stdenv.isDarwin && stdenv.isAarch64) then gnat else gnat9;
 
   gnat6 = wrapCC (gcc6.cc.override {
     name = "gnat";
