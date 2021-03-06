@@ -1,4 +1,5 @@
 { lib
+, stdenv
 , buildPythonPackage
 , fetchPypi
 , isPy3k
@@ -32,8 +33,12 @@ buildPythonPackage rec {
     futures
   ];
 
+  # aarch64-darwin forbids W+X memory, but this tests depends on it:
+  # * https://github.com/pyca/pyopenssl/issues/873
+  pytestFlags = lib.optionalString (stdenv.isDarwin && stdenv.isAarch64) "-k 'not test_pyopenssl_end_to_end'";
+
   checkPhase = ''
-    pytest
+    pytest ${pytestFlags}
   '';
 
   # Some of the tests use localhost networking.
