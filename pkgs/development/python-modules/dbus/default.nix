@@ -1,4 +1,4 @@
-{ lib, fetchPypi, buildPythonPackage, python, pkg-config, dbus, dbus-glib, isPyPy
+{ lib, stdenv, fetchPypi, buildPythonPackage, python, pkg-config, dbus, dbus-glib, isPyPy
 , ncurses, pygobject3, isPy3k }:
 
 buildPythonPackage rec {
@@ -18,6 +18,10 @@ buildPythonPackage rec {
   ];
 
   disabled = isPyPy;
+
+  preConfigure = lib.optionalString (lib.versionAtLeast stdenv.hostPlatform.darwinMinVersion "11") ''
+    MACOSX_DEPLOYMENT_TARGET=10.16
+  '';
 
   nativeBuildInputs = [ pkg-config ];
   buildInputs = [ dbus dbus-glib ]
